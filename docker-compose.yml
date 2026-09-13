@@ -1,51 +1,24 @@
-version: "3.9"
+# Local infrastructure for WEB_TLN (Redis for concurrent sessions).
+# Usage (from repo root):
+#   docker compose up -d
+# Or from BE:
+#   pwsh ./scripts/ensure-redis.ps1
 
 services:
-  monitoring:
-    # App .NET 8 (Blazor Server + API chung 1 project: Monitoring.Host)
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: monitoring-app
-    environment:
-      # Môi trường chạy: Development (local) hoặc Production (server) - env override appsettings
-      ASPNETCORE_ENVIRONMENT: Production
-      ASPNETCORE_URLS: http://0.0.0.0:80
-
-      # SQLite: Connection string inject từ env (CONNECTION_STRING) hoặc dùng mặc định /data/app.db
-      ConnectionStrings__DefaultConnection: ${CONNECTION_STRING:-Data Source=/data/app.db}
-
-      # Redis dùng tên service trong Docker network (redis), không dùng localhost
-      ConnectionStrings__Redis: redis:6379,abortConnect=false
-
-      # JWT: inject từ env (GitHub Secrets) - không hardcode trong file
-      Jwt__Key: ${JWT_KEY:-}
-    ports:
-      - "8080:80"
-    volumes:
-      - appdata:/data
-    depends_on:
-      - redis
-    networks:
-      - backend-network
-
   redis:
-    # Redis 7 dùng cho cache / distributed state
-    image: redis:7
-    container_name: redis
+    image: redis:7-alpine
+    container_name: tln-redis
     ports:
-      # Có thể bỏ nếu không cần truy cập Redis từ host
       - "6379:6379"
-    networks:
-      - backend-network
+    volumes:
+      - tln_redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
 
 volumes:
-  # Volume lưu file SQLite (app.db) bền vững
-  appdata:
-    driver: local
-
-networks:
-  # Network chung cho tất cả service (monitoring, redis)
-  backend-network:
-    driver: bridge
-
+  tln_redis_data:

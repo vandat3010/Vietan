@@ -1,0 +1,48 @@
+================================================================================
+MAP API device-monitor — chi field UI (khong thua)
+================================================================================
+GET /api/v1/stations/{stationId}/device-monitor
+
+INPUT: stationId, deviceId?, deviceType?, isEnable?
+
+OUTPUT data.items[]:
+  deviceId
+  name                         <- device.name          ("Bom 1")
+  ratedPowerKw                 <- tag RATED_POWER
+  status                       <- tag MOTOR_STATUS     (running|stopped|error|...)
+  windingTempActual.a/b/c      <- TEMP_COIL_A/B/C
+  windingTempAllowed.a/b/c     <- TEMP_COIL_*_MAX
+  bearingTop.actual/allowed    <- BEARING_TOP / _MAX
+  bearingBottom.actual/allowed <- BEARING_BOTTOM / _MAX
+  waterLevel.river/basin       <- LEVEL_RIVER / LEVEL_BASIN
+  runtime.instantH/totalH      <- RUNTIME_INSTANT / RUNTIME
+  electrical.voltageRs|St|Tr
+             .currentA
+             .powerFactor
+             .frequencyHz
+             .powerKw
+             .energyKwh
+
+KHONG tra: station, plc, code, displayName, statusLabel, unit, label, tag metadata.
+
+JSON mau:
+{
+  "items": [{
+    "deviceId": 1,
+    "name": "Bơm 1",
+    "ratedPowerKw": 160,
+    "status": "running",
+    "windingTempActual": { "a": 31, "b": 32, "c": 33 },
+    "windingTempAllowed": { "a": 80, "b": 80, "c": 80 },
+    "bearingTop": { "actual": 45.2, "allowed": 80 },
+    "bearingBottom": { "actual": 43.7, "allowed": 70 },
+    "waterLevel": { "river": 2.15, "basin": 1.42 },
+    "runtime": { "instantH": 3.33, "totalH": 348.83 },
+    "electrical": {
+      "voltageRs": 381.2, "voltageSt": 382.7, "voltageTr": 380.5,
+      "currentA": 48.5, "powerFactor": 0.92, "frequencyHz": 50.01,
+      "powerKw": 95.4, "energyKwh": 5715.2
+    }
+  }]
+}
+================================================================================

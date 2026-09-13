@@ -1,0 +1,345 @@
+﻿using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using Monitoring.Application.Interfaces;
+using Monitoring.Domain.Constants;
+using Monitoring.Host.Authorization;
+using Monitoring.Host.BlazorUI.Services;
+using Monitoring.Host.Hubs;
+using Monitoring.Host.Middleware;
+using Monitoring.Host.Services;
+using Monitoring.Infrastructure;
+using Monitoring.Infrastructure.Data;
+using Monitoring.Infrastructure.Persistence;
+using Monitoring.Infrastructure.Services;
+using Serilog;
+using StackExchange.Redis;
+using Monitoring.Host; // Add using so the generated App component class is found
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Docker: ép Kestrel listen 0.0.0.0 (tránh ERR_EMPTY_RESPONSE)
+if (Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER") == "true" ||
+    File.Exists("/.dockerenv"))
+{
+    builder.WebHost.UseUrls("http://0.0.0.0:80");
+}
+
+// Configure Serilog
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .WriteTo.File("logs/log-.txt", rollingInterval: RollingInterval.Day)
+    .CreateLogger();
+
+builder.Host.UseSerilog();
+
+// Khi Redis/BackgroundService lỗi, không tắt toàn bộ host
+builder.Services.Configure<Microsoft.Extensions.Hosting.HostOptions>(options =>
+{
+    options.BackgroundServiceExceptionBehavior = Microsoft.Extensions.Hosting.BackgroundServiceExceptionBehavior.Ignore;
+});
+
+// Blazor Server
+builder.Services.AddRazorComponents()
+    .AddInteractiveServerComponents();
+
+if (builder.Environment.IsDevelopment())
+{
+    builder.Services.AddServerSideBlazor(options =>
+    {
+        options.DetailedErrors = true;
+        options.DisconnectedCircuitMaxRetained = 100;
+        options.DisconnectedCircuitRetentionPeriod = TimeSpan.FromMinutes(3);
+    });
+}
+
+// API Controllers
+builder.Services.AddControllers();
+
+// Swagger
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+    {
+        Title = "Monitoring System API",
+        Version = "v1",
+        Description = "API cho hệ thống giám sát 512 tags",
+        Contact = new Microsoft.OpenApi.Models.OpenApiContact
+        {
+            Name = "Monitoring System",
+            Email = "admin@monitoring.local"
+        }
+    });
+
+    options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header using the Bearer scheme. Enter 'Bearer' [space] and then your token in the text input below.\n\nExample: \"Bearer 12345abcdef\"",
+        Name = "Authorization",
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Scheme = "Bearer"
+    });
+
+    options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
+        {
+            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            {
+                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                {
+                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
+
+// HttpContext & HttpClient cho Blazor UI
+builder.Services.AddHttpContextAccessor();
+
+builder.Services.AddScoped<AuthenticatedHttpMessageHandler>(sp =>
+{
+    var httpContextAccessor = sp.GetRequiredService<IHttpContextAccessor>();
+    var handler = new AuthenticatedHttpMessageHandler(httpContextAccessor)
+    {
+        InnerHandler = new HttpClientHandler()
+    };
+    return handler;
+});
+
+builder.Services.AddScoped<HttpClient>(sp =>
+{
+    var httpContextAccessor = sp.GetRequiredService<IHttpContextAccessor>();
+    var messageHandler = sp.GetRequiredService<AuthenticatedHttpMessageHandler>();
+
+    var httpContext = httpContextAccessor.HttpContext;
+    var request = httpContext?.Request;
+    var baseUrl = request != null
+        ? $"{request.Scheme}://{request.Host}"
+        : "http://localhost";
+
+    return new HttpClient(messageHandler) { BaseAddress = new Uri(baseUrl) };
+});
+
+// Infrastructure
+builder.Services.AddInfrastructure(builder.Configuration);
+
+// Redis optional
+var redisConnectionString = builder.Configuration.GetConnectionString("Redis")
+    ?? "localhost:6379";
+
+IConnectionMultiplexer? redisConnection = null;
+
+try
+{
+    var configuration = ConfigurationOptions.Parse(redisConnectionString);
+    configuration.AbortOnConnectFail = false;
+    redisConnection = ConnectionMultiplexer.Connect(configuration);
+    Log.Information("Connected to Redis at {RedisEndpoint}", redisConnectionString);
+}
+catch (Exception ex)
+{
+    Log.Warning(ex,
+        "Could not connect to Redis at {RedisEndpoint}. Redis-backed features will be disabled.",
+        redisConnectionString);
+}
+
+// SignalR (with Redis backplane only if Redis is available)
+#pragma warning disable CS0618
+if (redisConnection is not null)
+{
+    builder.Services.AddSingleton<IConnectionMultiplexer>(redisConnection);
+
+    builder.Services.AddSignalR(options =>
+    {
+        options.EnableDetailedErrors = builder.Environment.IsDevelopment();
+    })
+    .AddStackExchangeRedis(redisConnectionString, options =>
+    {
+        options.Configuration.ChannelPrefix = "MonitoringSystem";
+    });
+
+    builder.Services.AddHostedService<RedisSubscriberService>();
+}
+else
+{
+    builder.Services.AddSignalR(options =>
+    {
+        options.EnableDetailedErrors = builder.Environment.IsDevelopment();
+    });
+}
+#pragma warning restore CS0618
+
+// JWT Authentication
+var jwtKey = builder.Configuration["Jwt:Key"]
+    ?? throw new InvalidOperationException("JWT Key not configured");
+var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "MonitoringSystem";
+var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "MonitoringSystem";
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = jwtIssuer,
+        ValidAudience = jwtAudience,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+        ClockSkew = TimeSpan.Zero
+    };
+
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            var accessToken = context.Request.Query["access_token"];
+            var path = context.HttpContext.Request.Path;
+
+            if (!string.IsNullOrEmpty(accessToken) &&
+                path.StartsWithSegments("/monitorhub"))
+            {
+                context.Token = accessToken;
+            }
+
+            return Task.CompletedTask;
+        }
+    };
+});
+
+// Authorization
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("ViewDashboard", policy =>
+        policy.Requirements.Add(new PermissionRequirement(Permissions.ViewDashboard)));
+
+    options.AddPolicy("ViewMonitor", policy =>
+        policy.Requirements.Add(new PermissionRequirement(Permissions.ViewMonitor)));
+
+    options.AddPolicy("ViewHistory", policy =>
+        policy.Requirements.Add(new PermissionRequirement(Permissions.ViewHistory)));
+
+    options.AddPolicy("ExportData", policy =>
+        policy.Requirements.Add(new PermissionRequirement(Permissions.ExportData)));
+
+    options.AddPolicy("ManageUser", policy =>
+        policy.Requirements.Add(new PermissionRequirement(Permissions.ManageUser)));
+
+    options.AddPolicy("ViewLoginLog", policy =>
+        policy.Requirements.Add(new PermissionRequirement(Permissions.ViewLoginLog)));
+});
+
+builder.Services.AddSingleton<IAuthorizationHandler, PermissionHandler>();
+
+// Application services
+builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IMonitorService, MonitorService>();
+builder.Services.AddScoped<IHistoryService, HistoryService>();
+builder.Services.AddScoped<ITagCacheService, TagCacheService>();
+builder.Services.AddScoped<IAuditService, AuditService>();
+builder.Services.AddScoped<IUserService, UserService>();
+builder.Services.AddScoped<IRealtimeBroadcaster, SignalRRealtimeBroadcaster>();
+
+// CORS
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+    {
+        policy.AllowAnyOrigin()
+              .AllowAnyMethod()
+              .AllowAnyHeader();
+    });
+});
+
+var app = builder.Build();
+
+// Pipeline
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler("/Error", createScopeForErrors: true);
+    app.UseHsts();
+    // KHÔNG UseHttpsRedirection trong container HTTP-only
+}
+else
+{
+    app.UseDeveloperExceptionPage();
+}
+
+app.UseMiddleware<GlobalExceptionHandlerMiddleware>();
+
+// Log mỗi request để chẩn đoán
+app.Use(async (ctx, next) =>
+{
+    Log.Information("Request: {Method} {Path}", ctx.Request.Method, ctx.Request.Path);
+    await next(ctx);
+});
+
+app.UseStaticFiles();
+
+app.UseRouting();
+
+app.UseCors();
+app.UseAuthentication();
+app.UseAuthorization();
+
+// UseAntiforgery phải đặt SAU UseAuthentication/UseAuthorization và TRƯỚC Map* (Blazor bắt buộc)
+app.UseAntiforgery();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(options =>
+    {
+        options.SwaggerEndpoint("/swagger/v1/swagger.json", "Monitoring System API v1");
+        options.RoutePrefix = "swagger";
+        options.DisplayRequestDuration();
+        options.EnableTryItOutByDefault();
+    });
+}
+
+// Endpoint chẩn đoán - gọi sớm, không qua Blazor
+app.MapGet("/ping", () => Results.Ok("pong"));
+
+app.MapControllers();
+app.MapHub<MonitorHub>("/monitorhub");
+
+app.MapRazorComponents<App>()
+    .AddInteractiveServerRenderMode();
+
+// Chạy migrate + seed SAU KHI server đã listen (tránh block startup gây ERR_EMPTY_RESPONSE)
+app.Lifetime.ApplicationStarted.Register(() =>
+{
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            using var scope = app.Services.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<MonitoringDbContext>();
+            await dbContext.Database.MigrateAsync();
+            Log.Information("Database migrations applied");
+            await DbSeeder.SeedAsync(dbContext);
+            Log.Information("Database initialized and seeded");
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Error initializing database: {Message}", ex.Message);
+        }
+    });
+});
+
+Log.Information("Application starting");
+
+app.Run();

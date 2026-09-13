@@ -1,0 +1,770 @@
+================================================================================
+API THEO MAN HINH FE — Duong dan · Phuong thuc · Input · Output · JSON
+================================================================================
+Quy uoc:
+- Base: /api/v1
+- Response boc ApiResponse: { success, message, data, errors, traceId, timestampUtc }
+- Tam thoi KHONG phan trang (data.items = full list)
+- Auth dang TAT (TAM-TAT-LOGIN) — goi API khong can token
+- Domain DB: station -> plc -> device -> tag -> history.history_1s (join bang Id)
+- Format moi muc:
+    Controller / File / Method / Path / DB JOIN / INPUT / OUTPUT / JSON / STATUS / MESSAGE / Summary
+
+================================================================================
+1. LOGIN
+================================================================================
+Controller : AuthController
+File       : Controllers/AuthController.cs
+Method     : POST
+Path       : /api/v1/auth/login
+
+INPUT (body):
+  username : string
+  password : string
+
+OUTPUT (data):
+  accessToken, refreshToken, expiresIn, user { id, username, displayName, role }
+
+JSON request:
+{
+  "username": "admin",
+  "password": "Admin@123"
+}
+
+JSON response (data):
+{
+  "accessToken": "...",
+  "refreshToken": "...",
+  "expiresIn": 3600,
+  "user": {
+    "id": 1,
+    "username": "admin",
+    "displayName": "Administrator",
+    "role": "Admin"
+  }
+}
+
+Summary: Dang nhap, tra token va thong tin user.
+
+================================================================================
+2. DASHBOARD / MAP — Danh sach tram bom
+================================================================================
+Controller : StationsController
+File       : Controllers/Scada/StationsController.cs
+Method     : GET
+Path       : /api/v1/stations
+
+DB JOIN:
+  scada.station (doc truc tiep)
+
+INPUT (query):
+  isActive : bool?
+  keyword  : string?
+
+OUTPUT (data):
+  items[]  <- scada.station
+    id, code, name, isActive
+
+JSON response (data):
+{
+  "items": [
+    {
+      "id": 1,
+      "code": "TB-AB",
+      "name": "Tram Ap Bac",
+      "isActive": true
+    }
+  ]
+}
+
+STATUS:
+  200 OK
+
+MESSAGE:
+  200: "Danh sách trạm bơm."
+
+Summary: Lay danh sach tram tu scada.station — pin map va panel DANH SACH TRAM BOM.
+
+================================================================================
+3. CHI TIET TRAM (theo ID)
+================================================================================
+Controller : StationsController
+File       : Controllers/Scada/StationsController.cs
+Method     : GET
+Path       : /api/v1/stations/{id}
+
+DB JOIN:
+  scada.station WHERE id = @id
+
+INPUT (path):
+  id : long   (scada.station.id)
+
+OUTPUT (data) <- scada.station:
+  id, code, name, address, latitude, longitude, isActive
+
+JSON response (data):
+{
+  "id": 1,
+  "code": "TB-AB",
+  "name": "Tram Ap Bac",
+  "address": "Dong Anh, Ha Noi",
+  "latitude": 21.15,
+  "longitude": 105.6542,
+  "isActive": true
+}
+
+STATUS:
+  200 OK
+  404 Not Found — khong co station voi id do
+
+MESSAGE:
+  200: "Chi tiết trạm."
+  404: "Station not found." / "Station '{id}' was not found."
+
+Summary: Lay chi tiet 1 tram theo scada.station.id (gom address/toa do).
+
+================================================================================
+3b. THONG SO DIEN
+================================================================================
+Controller : StationsController
+File       : Controllers/Scada/StationsController.cs
+Method     : GET
+Path       : /api/v1/stations/{stationId}/electrical
+
+DB JOIN:
+  scada.station.id = @stationId
+    -> scada.plc.station_id
+      -> scada.device.plc_id
+        -> scada.tag.device_id
+          -> history.history_1s.tag_id (latest)
+
+INPUT (path + query):
+  stationId  : long     (scada.station.id)
+  deviceId   : long?    (scada.device.id)
+  deviceType : string?  (scada.device.device_type)
+
+OUTPUT (data):
+  station              <- scada.station
+    id, code, name
+  items[]
+    equipment          <- scada.device
+      id, code, name
+    parameters[]       <- scada.tag + history.history_1s
+      key, label, tagId, code, value, unit, timestamp
+
+JSON response (data):
+{
+  "station": { "id": 1, "code": "TB01", "name": "Tram Ap Bac" },
+  "items": [
+    {
+      "equipment": { "id": 1, "code": "PUMP_0001", "name": "Bom 1" },
+      "parameters": [
+        {
+          "key": "voltageRs",
+          "label": "Dien ap day RS",
+          "tagId": 101,
+          "code": "D1_VOLTAGE_RS",
+          "value": 381.2,
+          "unit": "V",
+          "timestamp": "2026-08-09T15:20:01Z"
+        }
+      ]
+    }
+  ]
+}
+
+STATUS:
+  200 OK
+  404 Not Found — stationId khong ton tai
+
+MESSAGE:
+  200: "Thông số điện theo trạm."
+  404: "Station not found." / "Station '{stationId}' was not found."
+
+Summary: Lay thong so dien thiet bi trong tram — join station->plc->device->tag->history_1s.
+
+================================================================================
+3c. SO DO NGUYEN LY
+================================================================================
+Controller : StationsController
+File       : Controllers/Scada/StationsController.cs
+Method     : GET
+Path       : /api/v1/stations/{stationId}/schematic
+
+DB JOIN:
+  scada.station.id = @stationId
+    -> scada.plc.station_id
+      -> scada.device.plc_id
+        -> scada.tag.device_id
+          -> history.history_1s.tag_id (latest)
+  layout (mba/msb/mdbs): nhan tinh cho SVG
+
+INPUT (path):
+  stationId : long   (scada.station.id)
+
+OUTPUT (data):
+  station              <- scada.station
+    id, code, name
+  layout
+    mba, msb, mdbs[]
+  pumps[]              <- scada.device + tag MCCB/status/runtime + history
+    id, deviceId, code, label, powerKw, mccbCode
+    motorStatus, kdmStatus, lockStatus
+    i1, i2, i3, v1, v2, v3
+    currentA, runtimeH
+
+JSON response (data):
+{
+  "station": { "id": 1, "code": "TB01", "name": "Tram Ap Bac" },
+  "layout": {
+    "mba": "MBA 2000KVA",
+    "msb": "MSB",
+    "mdbs": ["MDB1", "MDB2", "MDB3", "MDB4", "MDB5"]
+  },
+  "pumps": [
+    {
+      "id": 10,
+      "deviceId": 1,
+      "code": "PUMP_0001",
+      "label": "Bom 10",
+      "powerKw": 160,
+      "mccbCode": "MCCB10",
+      "motorStatus": "running",
+      "kdmStatus": "running",
+      "lockStatus": "closed",
+      "i1": 12.5,
+      "i2": 11.8,
+      "i3": 12.1,
+      "v1": 414.5,
+      "v2": 412.7,
+      "v3": 415.8,
+      "currentA": 48.5,
+      "runtimeH": 128.5
+    }
+  ]
+}
+
+STATUS:
+  200 OK
+  404 Not Found — stationId khong ton tai
+
+MESSAGE:
+  200: "Sơ đồ nguyên lý theo trạm."
+  404: "Station not found." / "Station '{stationId}' was not found."
+
+Summary: Lay du lieu so do nguyen ly (MCCB, the bom, status). Tach rieng khoi /electrical.
+
+================================================================================
+3d. THIET BI THEO TRAM (JOIN DB THEO ID)
+================================================================================
+Controller : StationsController
+File       : Controllers/Scada/StationsController.cs
+Method     : GET
+Path       : /api/v1/stations/{stationId}/device-cards
+
+DB JOIN (bat buoc theo Id — khong flatten UI):
+  scada.station.id  = @stationId
+       |
+       v  plc.station_id = station.id
+  scada.plc
+       |
+       v  device.plc_id = plc.id
+  scada.device
+       |
+       v  tag.device_id = device.id  (va tag.plc_id = plc.id)
+  scada.tag
+       |
+       v  history_1s.tag_id = tag.id  (gia tri moi nhat)
+  history.history_1s
+
+INPUT (path + query):
+  stationId  : long     (scada.station.id)
+  deviceId   : long?    (scada.device.id)
+  deviceType : string?  (scada.device.device_type, vd: "Pump")
+  isEnable   : bool?    (scada.device.is_enable)
+
+OUTPUT (data) — chi tiet tung bang:
+  station                    <- scada.station
+    id, code, name, address, latitude, longitude, isActive
+  items[]
+    plc                      <- scada.plc (qua device.plc_id)
+      id, stationId, stationCode, code, name, plcType,
+      ipAddress, rack, slot, port, pollingInterval,
+      reconnectInterval, timeout, maxConnection, isEnable, description, ...
+    device                   <- scada.device
+      id, plcId, plcCode, code, name, displayName,
+      deviceType, description, isEnable, ...
+    tags[]                   <- scada.tag + history.history_1s
+      id, plcId, deviceId, code, tagName, displayName, address,
+      dataType, unit, scale, offsetValue, readOnly, writeEnable,
+      enableRealtime, enableAlarm, description,
+      value, timestamp
+
+BANG + KHOA NGOAI:
+  scada.station          PK id
+  scada.plc              PK id, FK station_id -> station.id
+  scada.device           PK id, FK plc_id -> plc.id
+  scada.tag              PK id, FK device_id -> device.id, FK plc_id -> plc.id
+  history.history_1s     (time, tag_id, value) — join logic tag_id = tag.id
+
+JSON response (data):
+{
+  "station": {
+    "id": 1,
+    "code": "TB01",
+    "name": "Tram Ap Bac",
+    "address": "Dong Anh, Ha Noi",
+    "latitude": 21.15,
+    "longitude": 105.6542,
+    "isActive": true
+  },
+  "items": [
+    {
+      "plc": {
+        "id": 10,
+        "stationId": 1,
+        "stationCode": "TB01",
+        "code": "PLC01",
+        "name": "PLC Tram 1",
+        "plcType": "S7-1500",
+        "ipAddress": "192.168.1.10",
+        "rack": 0,
+        "slot": 1,
+        "port": 102,
+        "isEnable": true
+      },
+      "device": {
+        "id": 1,
+        "plcId": 10,
+        "plcCode": "PLC01",
+        "code": "PUMP_0001",
+        "name": "Bom 1",
+        "displayName": "Bom 1",
+        "deviceType": "Pump",
+        "isEnable": true
+      },
+      "tags": [
+        {
+          "id": 101,
+          "plcId": 10,
+          "deviceId": 1,
+          "code": "D1_TEMP_COIL_A",
+          "tagName": "TempCoilA",
+          "displayName": "Nhiet do cuon A",
+          "address": "DB1.DBD0",
+          "dataType": "Float",
+          "unit": "C",
+          "value": 31,
+          "timestamp": "2026-08-09T15:00:00Z"
+        }
+      ]
+    }
+  ]
+}
+
+STATUS:
+  200 OK
+  404 Not Found — stationId khong ton tai
+
+MESSAGE:
+  200: "Thiết bị theo trạm (plc + device + tag + history)."
+  404: "Station not found." / "Station '{stationId}' was not found."
+
+Summary: Tra chi tiet station + tung device kem plc cha va toan bo tag + value history theo Id. FE tu map tags[] -> UI.
+
+================================================================================
+3e. DANH SACH BOM + THONG SO (MAN DEVICES) — parameters + electrical tach rieng
+================================================================================
+Controller : StationsController
+File       : Controllers/Scada/StationsController.cs
+Method     : GET
+Path       : /api/v1/stations/{stationId}/device-monitor
+
+DB JOIN (map du cot):
+  scada.station.id = @stationId
+    -> scada.plc.station_id
+      -> scada.device.plc_id
+        -> scada.tag.device_id
+          -> history.history_1s.tag_id (latest value, timestamp)
+
+INPUT (path + query):
+  stationId  : long
+  deviceId   : long?
+  deviceType : string?
+  isEnable   : bool?
+
+OUTPUT (data):
+  items[] — chi field card UI (khong thua):
+    deviceId, name, ratedPowerKw, status
+    windingTempActual { a,b,c }
+    windingTempAllowed { a,b,c }
+    bearingTop / bearingBottom { actual, allowed }
+    waterLevel { river, basin }
+    runtime { instantH, totalH }
+    electrical { voltageRs, voltageSt, voltageTr, currentA,
+                 powerFactor, frequencyHz, powerKw, energyKwh }
+
+Chi tiet: BE/docs/MAP_Device_Monitor_API.txt
+        (voltageRs, voltageSt, voltageTr, currentA, powerFactor,
+         frequencyHz, powerKw, energyKwh)
+
+STATUS:
+  200 OK
+  404 Not Found
+  500 Unexpected
+
+MESSAGE:
+  200: "Danh sách bơm theo trạm (parameters + electrical)."
+  404: "Station not found." / StationNotFoundFor(stationId)
+
+Summary: Man Devices — moi bom co stationId, plc, device day du cot DB;
+parameters = van hanh; electrical = object rieng 8 thong so dien.
+Chi tiet map tung field <-> cot DB: BE/docs/MAP_Device_Monitor_API.txt
+
+================================================================================
+4. DANH SACH THIET BI (BOM) TRONG TRAM
+================================================================================
+Method : GET
+Path   : /api/v1/stations/{stationId}/devices
+
+INPUT (path + query):
+  stationId  : long
+  deviceType : string?   (vd: Pump)
+  isEnable   : bool?
+
+OUTPUT (data):
+  items[]
+    id, code, name, displayName, deviceType, isEnable
+
+JSON response (data):
+{
+  "items": [
+    {
+      "id": 10,
+      "code": "PUMP-001",
+      "name": "Bom 1",
+      "displayName": "Bom 1",
+      "deviceType": "Pump",
+      "isEnable": true
+    }
+  ]
+}
+
+Summary: Danh sach bom/thiet bi cua 1 tram (man Devices).
+
+================================================================================
+5. MONITOR — Thiet bi + Tag realtime
+================================================================================
+Method : GET
+Path   : /api/v1/stations/{stationId}/monitor
+
+INPUT (path + query):
+  stationId : long
+  deviceId  : long?
+  search    : string?
+
+OUTPUT (data):
+  items[]
+    equipment { id, code, name }
+    tags[] { id, code, name, value, unit, status, quality, timestamp }
+
+JSON response (data):
+{
+  "items": [
+    {
+      "equipment": {
+        "id": 10,
+        "code": "PUMP-001",
+        "name": "Bom 1"
+      },
+      "tags": [
+        {
+          "id": 101,
+          "code": "TEMP-001",
+          "name": "Nhiet do",
+          "value": 75.5,
+          "unit": "C",
+          "status": "Normal",
+          "quality": "Good",
+          "timestamp": "2026-08-09T15:20:01Z"
+        }
+      ]
+    }
+  ]
+}
+
+Summary: Thiet bi va tag dang giam sat (gia tri hien tai).
+
+================================================================================
+6. CHI TIET 1 THIET BI (BOM)
+================================================================================
+Method : GET
+Path   : /api/v1/devices/{deviceId}/detail
+
+INPUT (path):
+  deviceId : long
+
+OUTPUT (data):
+  equipment { id, code, name, type, status }
+  tags[] { id, code, name, value, unit, quality, timestamp }
+  alarm { id, severity, message, value, limit, timestamp }   // nullable
+  energy { today, month, unit }                              // nullable
+
+JSON response (data):
+{
+  "equipment": {
+    "id": 10,
+    "code": "PUMP-001",
+    "name": "Bom 1",
+    "type": "Pump",
+    "status": "Running"
+  },
+  "tags": [
+    {
+      "id": 101,
+      "code": "TEMP-001",
+      "name": "Nhiet do",
+      "value": 75.5,
+      "unit": "C",
+      "quality": "Good",
+      "timestamp": "2026-08-09T15:20:01Z"
+    }
+  ],
+  "alarm": {
+    "id": 500,
+    "severity": "High",
+    "message": "Nhiet do vuot nguong",
+    "value": 85,
+    "limit": 80,
+    "timestamp": "2026-08-09T15:18:00Z"
+  },
+  "energy": {
+    "today": 120.5,
+    "month": 3500.2,
+    "unit": "kWh"
+  }
+}
+
+Summary: Chi tiet 1 bom: info + tag + alarm + nang luong. Khong phan trang.
+
+================================================================================
+7. DO THI / HISTORICAL
+================================================================================
+Method : GET
+Path   : /api/v1/history/{interval}
+         interval = 1s | 1m | 30m
+
+INPUT (path + query):
+  interval : string
+  tagIds   : long[]
+  from     : datetime
+  to       : datetime
+
+OUTPUT (data):
+  tags[] { id, code, name, unit }
+  series[] { tagId, points[] { timestamp, value } }
+
+JSON response (data):
+{
+  "tags": [
+    { "id": 101, "code": "TEMP-001", "name": "Nhiet do", "unit": "C" }
+  ],
+  "series": [
+    {
+      "tagId": 101,
+      "points": [
+        { "timestamp": "2026-08-09T15:00:00Z", "value": 72.1 },
+        { "timestamp": "2026-08-09T15:00:30Z", "value": 73.0 }
+      ]
+    }
+  ]
+}
+
+Summary: Lich su tag theo khoang thoi gian de ve bieu do Trend.
+
+================================================================================
+8. SU KIEN — LOI / ALARM
+================================================================================
+Method : GET
+Path   : /api/v1/alarm-histories
+
+INPUT (query):
+  stationId      : long?
+  deviceId       : long?
+  tagId          : long?
+  type           : string?
+  isAcknowledged : bool?
+  from           : datetime?
+  to             : datetime?
+  search         : string?
+
+OUTPUT (data):
+  items[]
+    alarmId
+    tag { id, code, name }
+    equipment { id, code, name }
+    severity / type
+    status
+    message
+    triggeredAt / startTime
+    resolvedAt / endTime
+
+JSON response (data):
+{
+  "items": [
+    {
+      "alarmId": 500,
+      "tag": { "id": 101, "code": "TEMP-001", "name": "Nhiet do" },
+      "equipment": { "id": 10, "code": "PUMP-001", "name": "Bom 1" },
+      "type": "High",
+      "status": "Active",
+      "message": "Nhiet do vuot nguong",
+      "startTime": "2026-08-09T15:18:00Z",
+      "endTime": null
+    }
+  ]
+}
+
+Summary: Danh sach alarm/loi theo dieu kien loc. Khong phan trang.
+
+================================================================================
+9. SU KIEN — NHAT KY VAN HANH / EVENT
+================================================================================
+Method : GET
+Path   : /api/v1/user-activity-logs
+  (hoac) /api/v1/event-logs
+
+INPUT (query):
+  from       : datetime?
+  to         : datetime?
+  actionType : string?     (user-activity-logs)
+  level      : string?     (event-logs)
+  userName   : string?
+  search     : string?
+
+OUTPUT (data):
+  items[]
+    eventId
+    eventType / actionType
+    description
+    user { username }
+    ipAddress
+    timestamp
+
+JSON response (data):
+{
+  "items": [
+    {
+      "eventId": 900,
+      "actionType": "Login",
+      "description": "Dang nhap thanh cong",
+      "user": { "username": "admin" },
+      "ipAddress": "192.168.1.10",
+      "timestamp": "2026-08-09T08:00:00Z"
+    }
+  ]
+}
+
+Summary: Nhat ky su kien / van hanh. Khong phan trang.
+
+================================================================================
+10. QUAN LY NGUOI DUNG — LIST
+================================================================================
+Method : GET
+Path   : /api/v1/users
+
+INPUT (query):
+  keyword / search : string?
+  roleId           : guid?
+  status / isActive: string? / bool?
+
+OUTPUT (data):
+  items[]
+    id, email/username, displayName (firstName+lastName),
+    status, lastLoginAtUtc, roles[]
+
+KHONG TRA: password, passwordHash, token
+
+JSON response (data):
+{
+  "items": [
+    {
+      "id": "a1b2c3d4-....",
+      "email": "admin@example.com",
+      "firstName": "Admin",
+      "lastName": "System",
+      "status": "Active",
+      "lastLoginAtUtc": "2026-08-09T08:00:00Z",
+      "roles": ["Administrator"]
+    }
+  ]
+}
+
+Summary: Danh sach user + role. Khong tra mat khau. Khong phan trang.
+
+================================================================================
+11. QUAN LY NGUOI DUNG — DETAIL
+================================================================================
+Method : GET
+Path   : /api/v1/users/{userId}
+
+INPUT (path):
+  userId : guid
+
+OUTPUT (data):
+  id, email, firstName, lastName, phoneNumber, status, roles[], permissions[]
+
+JSON response (data):
+{
+  "id": "a1b2c3d4-....",
+  "email": "admin@example.com",
+  "firstName": "Admin",
+  "lastName": "System",
+  "phoneNumber": "0901234567",
+  "status": "Active",
+  "roles": ["Administrator"],
+  "permissions": ["users.view", "users.create"]
+}
+
+Summary: Chi tiet 1 user: thong tin co ban, role, permission. Khong phan trang.
+
+================================================================================
+SUMMARY TAT CA API (lam gi)
+================================================================================
+Method Path                                          | Lam gi                              | Status
+-----------------------------------------------------|-------------------------------------|--------
+POST   /api/v1/auth/login                            | Dang nhap, tra token + user         | Da co
+GET    /api/v1/stations                              | Lay danh sach tram bom (map)        | Da co
+GET    /api/v1/stations/{stationId}                  | Lay chi tiet 1 tram                 | Da co
+GET    /api/v1/stations/{stationId}/electrical       | Lay thong so dien cac bom trong tram| Da co
+GET    /api/v1/stations/{stationId}/schematic        | Lay du lieu so do nguyen ly (MCCB, the bom, status) | Da co
+GET    /api/v1/stations/{stationId}/device-cards     | Join station->plc->device->tag->history_1s theo Id | Da co
+GET    /api/v1/stations/{stationId}/device-monitor   | Bom + parameters + electrical (object rieng), map du cot DB | Da co
+GET    /api/v1/stations/{stationId}/devices          | Lay danh sach thiet bi/bom cua tram | Chua co
+GET    /api/v1/stations/{stationId}/monitor          | Lay thiet bi + tag realtime         | Chua co
+GET    /api/v1/devices/{deviceId}/detail             | Lay chi tiet 1 bom                  | Chua co
+GET    /api/v1/history/{interval}                    | Lay lich su tag ve bieu do          | Da co
+GET    /api/v1/alarm-histories                       | Lay danh sach alarm/loi             | Da co
+GET    /api/v1/user-activity-logs                    | Lay nhat ky van hanh                | Da co
+GET    /api/v1/users                                 | Lay danh sach user                  | Da co
+GET    /api/v1/users/{userId}                        | Lay chi tiet 1 user                 | Da co
+
+================================================================================
+GHI CHU
+================================================================================
+- Auth dang TAT (TAM-TAT-LOGIN).
+- Electrical va Schematic la 2 API rieng.
+- interval history: 1s | 1m | 30m
+
+GHI CHU STATUS / MESSAGE (constant + enum):
+  HTTP     : ScadaHttpStatuses.Ok=200, NotFound=404, BadRequest=400
+  Message  : ScadaApiMessages.* (StationsListOk, StationDetailOk, StationElectricalOk, ...)
+  Error    : ScadaErrorCodes.StationNotFound = "Station.NotFound"
+  Van hanh : enum PumpOperatingStatus (Running=1, Error=2, Stopped=3, Maintenance=4, Unknown=0)
+  Khoa     : enum LockStatus (Open=0, Closed=1)
+  JSON FE  : ScadaStatusCodes.running|stopped|error|maintenance|unknown|open|closed
+  File     : Shared/Constants/Scada*.cs , Domain/Enums/PumpOperatingStatus.cs, LockStatus.cs
+
+================================================================================
+File: BE/docs/API_Man_Hinh_FE.txt
+================================================================================

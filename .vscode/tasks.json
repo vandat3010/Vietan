@@ -1,0 +1,33 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ensure-redis",
+      "type": "shell",
+      "command": "pwsh -NoProfile -File \"${workspaceFolder}/BE/scripts/ensure-redis.ps1\"",
+      "windows": {
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}/BE/scripts/ensure-redis.ps1\""
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "runOptions": {
+        "runOn": "folderOpen"
+      }
+    },
+    {
+      "label": "start-api-with-redis",
+      "dependsOn": ["ensure-redis"],
+      "type": "shell",
+      "command": "dotnet run --project \"${workspaceFolder}/BE/src/Api/Backend.Api.csproj\" --launch-profile http",
+      "problemMatcher": "$msCompile",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    }
+  ]
+}

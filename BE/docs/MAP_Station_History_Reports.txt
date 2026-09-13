@@ -1,0 +1,25 @@
+================================================================================
+MAP man Bao cao lich su tram — devices + muc nuoc + nhiet do bom
+================================================================================
+
+1) Dropdown Thiet bi (chi id + name)
+GET /api/v1/stations/{stationId}/reports/devices
+Response items[]: { id, name }
+  id = 0           -> Muc nuoc   -> goi /reports/water-levels
+  id = deviceId    -> Nhiet do bom N -> goi /reports/pump-temperatures?deviceId=
+
+2) Bao cao Muc nuoc  (history.history_30s)
+GET /api/v1/stations/{stationId}/reports/water-levels
+  ?reportDate&startTime&endTime&deviceId?&pageNumber&pageSize
+Response row: time, riverLevel, discharge1..10
+
+3) Bao cao Nhiet do bom  (history.history_30s)
+GET /api/v1/stations/{stationId}/reports/pump-temperatures
+  ?reportDate&startTime&endTime&deviceId?&pageNumber&pageSize
+  deviceId = chon "Nhiet do bom N" tu dropdown; null = tat ca bom
+Response row: time, deviceId, pump, tempA, tempB, tempC, bearingBottom, bearingTop
+Tag: TEMP_COIL_A/B/C, BEARING_BOTTOM, BEARING_TOP
+
+Mac dinh: reportDate=hom nay VN, 00:00:00-23:59:59, sort time DESC, co phan trang.
+KHONG dung alarm_history.
+================================================================================

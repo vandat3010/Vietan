@@ -1,0 +1,27 @@
+================================================================================
+MAP man Bao cao Muc nuoc — history.history_30s
+================================================================================
+GET /api/v1/stations/{stationId}/reports/water-levels
+
+INPUT (query):
+  reportDate   DateOnly?   mac dinh: hom nay (VN)
+  startTime    TimeOnly?   mac dinh: 00:00:00
+  endTime      TimeOnly?   mac dinh: 23:59:59
+  deviceId     long?       null = tat ca thiet bi trong tram
+  deviceType   string?     vd Level / loc "Muc nuoc"
+  pageNumber   int
+  pageSize     int
+
+OUTPUT data (PaginationResult):
+  items[]:
+    time, riverLevel, discharge1..discharge10
+  pageNumber, pageSize, totalCount, totalPages, hasPreviousPage, hasNextPage
+
+NGUON:
+  scada.tag (LEVEL_RIVER, LEVEL_DISCHARGE_1..10)
+  history.history_30s (time, tag_id, value)
+  Pivot theo time, ORDER BY time DESC, phan trang theo dong thoi gian.
+  Chi trong 1 ngay (reportDate + start/end).
+
+Seed: BE/scripts/seed_history_30s_water_level.sql
+================================================================================

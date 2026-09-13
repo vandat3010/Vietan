@@ -1,0 +1,159 @@
+############################################
+# .NET / build
+############################################
+**/bin/
+**/obj/
+**/out/
+**/artifacts/
+*.dll
+*.exe
+*.pdb
+*.cache
+*.ilk
+*.meta
+*.obj
+*.iobj
+*.ipdb
+*.pgc
+*.pgd
+*.rsp
+*.sbr
+*.tlb
+*.tli
+*.tlh
+*.tmp
+*.tmp_proj
+*.log
+*.vspscc
+*.vssscc
+*.nupkg
+*.snupkg
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+############################################
+# Visual Studio / Rider / VS Code / Cursor
+############################################
+.vs/
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.suo
+*.userprefs
+*.sln.docstates
+*.user
+*.userosscache
+*.sln.iml
+*.DotSettings.user
+*.rsuser
+*.VC.db
+*.VC.VC.opendb
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings
+
+############################################
+# Test / coverage
+############################################
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+*.trx
+*.coverage
+*.coveragexml
+coverage*
+TestResults/
+*.testsettings
+*.runsettings.user
+
+############################################
+# NuGet
+############################################
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+.nuget/
+
+############################################
+# Publish / deploy
+############################################
+**/publish/
+**/PublishProfiles/*.pubxml.user
+*.publishproj
+*.azurePubxml
+
+############################################
+# Secrets & local config (KHÔNG đẩy lên git)
+############################################
+.env
+.env.*
+!.env.example
+**/appsettings.*.local.json
+**/appsettings.Local.json
+**/secrets.json
+**/Properties/launchSettings.json.user
+
+# User-secrets folder (nếu copy nhầm vào repo)
+**/UserSecrets/
+
+############################################
+# Logs (Serilog rolling file, v.v.)
+############################################
+logs/
+**/logs/
+*.log
+log/
+
+############################################
+# Uploads / local file storage
+############################################
+**/wwwroot/uploads/
+**/uploads/
+!**/wwwroot/uploads/.gitkeep
+
+############################################
+# OS junk
+############################################
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+############################################
+# Temp / agent / local tooling
+############################################
+.tmp/
+.tmp/**
+**/.tmp/
+*.swp
+*.swo
+*~
+.cursor/
+# Giữ skill/rule nếu team muốn share — bỏ comment dòng dưới nếu cần ignore hết
+# .cursor/**
+
+############################################
+# EF / database local dumps
+############################################
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.dump
+*.bak
+
+############################################
+# Node (nếu sau này thêm FE cùng repo)
+############################################
+node_modules/
+npm-debug.log*
+yarn-error.log*
+dist/
+.turbo/
