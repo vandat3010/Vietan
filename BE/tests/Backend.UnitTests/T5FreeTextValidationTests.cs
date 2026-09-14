@@ -1,9 +1,11 @@
 using Backend.Application.DTOs.Auth;
 using Backend.Application.DTOs.Roles;
 using Backend.Application.DTOs.Users;
+using Backend.Application.Options;
 using Backend.Application.Validators;
 using Backend.Shared.Constants;
 using Backend.Shared.Extensions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Backend.UnitTests;
@@ -11,6 +13,9 @@ namespace Backend.UnitTests;
 /// <summary>T5 — free-text length/control-char validation and HTML sanitizer helper.</summary>
 public class T5FreeTextValidationTests
 {
+    private static RegisterRequestValidator CreateRegisterValidator() =>
+        new(Options.Create(new PasswordPolicyOptions()));
+
     // --- Identifier / control characters ---
 
     [Theory]
@@ -115,7 +120,7 @@ public class T5FreeTextValidationTests
     [Fact]
     public void Register_VietnameseDisplayName_Passes()
     {
-        var result = new RegisterRequestValidator().Validate(new RegisterRequest
+        var result = CreateRegisterValidator().Validate(new RegisterRequest
         {
             Username = "operator1",
             DisplayName = "Thiết bị áp suất cao",
@@ -127,7 +132,7 @@ public class T5FreeTextValidationTests
     [Fact]
     public void Register_DisplayNameExactlyMax_Passes()
     {
-        var result = new RegisterRequestValidator().Validate(new RegisterRequest
+        var result = CreateRegisterValidator().Validate(new RegisterRequest
         {
             Username = "operator1",
             DisplayName = new string('A', ValidationConstants.DisplayNameMaxLength),
@@ -139,7 +144,7 @@ public class T5FreeTextValidationTests
     [Fact]
     public void Register_DisplayNameOverMax_Fails()
     {
-        var result = new RegisterRequestValidator().Validate(new RegisterRequest
+        var result = CreateRegisterValidator().Validate(new RegisterRequest
         {
             Username = "operator1",
             DisplayName = new string('A', ValidationConstants.DisplayNameMaxLength + 1),
@@ -151,7 +156,7 @@ public class T5FreeTextValidationTests
     [Fact]
     public void Register_WhitespaceDisplayName_Fails()
     {
-        var result = new RegisterRequestValidator().Validate(new RegisterRequest
+        var result = CreateRegisterValidator().Validate(new RegisterRequest
         {
             Username = "operator1",
             DisplayName = "   ",
@@ -163,7 +168,7 @@ public class T5FreeTextValidationTests
     [Fact]
     public void Register_UsernameWithNewline_Fails()
     {
-        var result = new RegisterRequestValidator().Validate(new RegisterRequest
+        var result = CreateRegisterValidator().Validate(new RegisterRequest
         {
             Username = "admin\nroot",
             DisplayName = "Admin",
@@ -175,7 +180,7 @@ public class T5FreeTextValidationTests
     [Fact]
     public void Register_DisplayNameWithControlChar_Fails()
     {
-        var result = new RegisterRequestValidator().Validate(new RegisterRequest
+        var result = CreateRegisterValidator().Validate(new RegisterRequest
         {
             Username = "operator1",
             DisplayName = "Admin\0",

@@ -2,14 +2,16 @@ using Backend.Application.DTOs.Scada;
 using Backend.Application.Interfaces.Services.Scada;
 using Backend.Shared.Constants;
 using Backend.Shared.Responses;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Backend.Api.Controllers.Scada;
 
-/// <summary>API cấu hình profile ghi lịch sử (scada.history_profile).</summary>
+/// <summary>API cấu hình profile ghi lịch sử (scada.history_profile) — Admin only.</summary>
 [ApiController]
 [Route("api/v1/history-profiles")]
 [Produces("application/json")]
+[Authorize(Roles = ScadaRoles.AdminOnly)]
 public class HistoryProfilesController(IHistoryProfileQueryService profiles) : ControllerBase
 {
     /// <summary>

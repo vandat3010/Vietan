@@ -15,6 +15,8 @@ public static class ScadaApiMessages
     public const string StationReportTableOk = "Bảng báo cáo theo thiết bị (history_30m).";
     public const string StationEventDevicesOk = "Danh sách thiết bị lịch sử sự kiện.";
     public const string StationEventHistoryOk = "Lịch sử sự kiện theo trạm (alarm_history).";
+    public const string StationActiveAlarmsOk = "Alarm đang mở theo trạm (EndTime IS NULL).";
+    public const string StationUpdatedOk = "Cập nhật trạm thành công.";
     public const string StationPumpTemperatureReportOk = "Báo cáo nhiệt độ bơm theo trạm.";
     public const string StationChartDevicesOk = "Danh sách thiết bị đồ thị.";
     public const string StationChartHistoryOk = "Lịch sử đồ thị theo thiết bị.";

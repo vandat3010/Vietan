@@ -3,6 +3,7 @@ using Backend.Application.Interfaces.Services.Scada;
 using Backend.Shared.Constants;
 using Backend.Shared.Pagination;
 using Backend.Shared.Responses;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Backend.Api.Controllers.Scada;
@@ -11,6 +12,7 @@ namespace Backend.Api.Controllers.Scada;
 [ApiController]
 [Route("api/v1/tags")]
 [Produces("application/json")]
+[Authorize]
 public class TagsController(ITagQueryService tags) : ControllerBase
 {
     /// <summary>

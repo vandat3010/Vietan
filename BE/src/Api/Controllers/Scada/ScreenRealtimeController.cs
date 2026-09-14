@@ -4,18 +4,19 @@ using Backend.Application.Scada;
 using Backend.Shared.Constants;
 using Backend.Shared.Pagination;
 using Backend.Shared.Responses;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Backend.Api.Controllers.Scada;
 
 /// <summary>
 /// Snapshot + history by screen mapping (Excel → tag_screen_mapping).
-/// Realtime values come from IRealtimeDataStore (Fake or Redis). History from Timescale.
-/// Viewing screens is open for now; user/IAM APIs stay authorized separately.
+/// Requires authenticated SCADA session (JWT).
 /// </summary>
 [ApiController]
 [Route("api/v1/screens/{screen}")]
 [Produces("application/json")]
+[Authorize]
 public class ScreenRealtimeController(IScreenRealtimeQueryService screens) : ControllerBase
 {
     /// <summary>

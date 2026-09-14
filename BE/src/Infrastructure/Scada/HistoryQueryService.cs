@@ -1,6 +1,10 @@
+using Backend.Application.Common;
 using Backend.Application.DTOs.History;
+using Backend.Application.Interfaces.Services;
 using Backend.Application.Interfaces.Services.Scada;
+using Backend.Domain.Enums;
 using Backend.Infrastructure.Persistence.Context;
+using Backend.Shared.Constants;
 using Backend.Shared.Pagination;
 using Backend.Shared.Results;
 using Microsoft.EntityFrameworkCore;
@@ -8,10 +12,12 @@ using Microsoft.EntityFrameworkCore;
 namespace Backend.Infrastructure.Scada;
 
 /// <summary>
-/// Read-only queries over Timescale hypertables in schema <c>history</c>.
-/// Sample queries require a time window so clients cannot accidentally scan the whole table.
+/// History reads + alarm acknowledge/clear against Timescale <c>alarm_history</c>.
 /// </summary>
-public class HistoryQueryService(ApplicationDbContext db) :
+public class HistoryQueryService(
+    ApplicationDbContext db,
+    ICurrentUserService currentUser,
+    ISystemAuditService systemAudit) :
     IHistorySampleQueryService,
     IAlarmHistoryQueryService,
     IScadaEventLogQueryService,
@@ -130,10 +136,14 @@ public class HistoryQueryService(ApplicationDbContext db) :
             q = q.Where(a => a.TagId == tagId);
         if (query.DeviceId is { } deviceId)
             q = q.Where(a => a.DeviceId == deviceId);
+        if (query.StationId is { } stationId)
+            q = q.Where(a => a.StationId == stationId);
         if (!string.IsNullOrWhiteSpace(query.Type))
             q = q.Where(a => a.Type == query.Type);
         if (query.IsAcknowledged is { } isAcknowledged)
             q = q.Where(a => a.IsAcknowledged == isAcknowledged);
+        if (query.ActiveOnly == true)
+            q = q.Where(a => a.EndTime == null);
         if (query.From is { } from)
             q = q.Where(a => a.StartTime >= from);
         if (query.To is { } to)
@@ -203,6 +213,132 @@ public class HistoryQueryService(ApplicationDbContext db) :
             ? Result<AlarmHistoryDto>.Failure("AlarmHistory.NotFound", $"Alarm history '{id}' was not found.")
             : Result<AlarmHistoryDto>.Success(dto);
     }
+
+    public async Task<Result<AlarmHistoryDto>> AcknowledgeAsync(
+        long id,
+        string? note,
+        CancellationToken cancellationToken = default)
+    {
+        // Conditional update reduces lost-update races when two operators ack concurrently.
+        var now = DateTimeOffset.UtcNow;
+        var affected = await db.AlarmHistories
+            .Where(a => a.Id == id && !a.IsAcknowledged)
+            .ExecuteUpdateAsync(
+                setters => setters.SetProperty(a => a.IsAcknowledged, true),
+                cancellationToken);
+
+        var row = await db.AlarmHistories.AsNoTracking().FirstOrDefaultAsync(a => a.Id == id, cancellationToken);
+        if (row is null)
+            return Result<AlarmHistoryDto>.Failure("AlarmHistory.NotFound", $"Alarm history '{id}' was not found.");
+
+        if (affected > 0)
+        {
+            await systemAudit.LogAsync(new SystemAuditEntry
+            {
+                Action = AuditActionNames.AcknowledgeAlarm,
+                EventType = AuditEventType.Alarm,
+                Status = AuditStatus.Success,
+                Module = "Alarms",
+                EntityType = "AlarmHistory",
+                EntityId = id.ToString(),
+                Description = string.IsNullOrWhiteSpace(note)
+                    ? $"Acknowledged alarm '{id}'."
+                    : $"Acknowledged alarm '{id}': {note.Trim()}",
+                UserId = currentUser.OperatorUserId,
+                UserName = currentUser.Username,
+                AdditionalData = new Dictionary<string, object?>
+                {
+                    ["acknowledgedAtUtc"] = now,
+                    ["stationId"] = row.StationId,
+                    ["deviceId"] = row.DeviceId,
+                    ["tagId"] = row.TagId
+                }
+            }, cancellationToken);
+        }
+
+        return Result<AlarmHistoryDto>.Success(MapAlarm(row));
+    }
+
+    public async Task<Result<AlarmHistoryDto>> ClearAsync(
+        long id,
+        string? note,
+        CancellationToken cancellationToken = default)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var affected = await db.AlarmHistories
+            .Where(a => a.Id == id && a.EndTime == null)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(a => a.EndTime, now)
+                    .SetProperty(a => a.IsAcknowledged, true),
+                cancellationToken);
+
+        var row = await db.AlarmHistories.AsNoTracking().FirstOrDefaultAsync(a => a.Id == id, cancellationToken);
+        if (row is null)
+            return Result<AlarmHistoryDto>.Failure("AlarmHistory.NotFound", $"Alarm history '{id}' was not found.");
+
+        if (affected > 0 && row.DurationSeconds is null)
+        {
+            var duration = (now - row.StartTime).TotalSeconds;
+            await db.AlarmHistories
+                .Where(a => a.Id == id)
+                .ExecuteUpdateAsync(
+                    setters => setters.SetProperty(a => a.DurationSeconds, duration),
+                    cancellationToken);
+            row = await db.AlarmHistories.AsNoTracking().FirstAsync(a => a.Id == id, cancellationToken);
+        }
+        if (affected == 0 && row.EndTime is not null)
+        {
+            // Already cleared — idempotent success.
+            return Result<AlarmHistoryDto>.Success(MapAlarm(row));
+        }
+
+        if (affected > 0)
+        {
+            await systemAudit.LogAsync(new SystemAuditEntry
+            {
+                Action = AuditActionNames.ClearAlarm,
+                EventType = AuditEventType.Alarm,
+                Status = AuditStatus.Success,
+                Module = "Alarms",
+                EntityType = "AlarmHistory",
+                EntityId = id.ToString(),
+                Description = string.IsNullOrWhiteSpace(note)
+                    ? $"Cleared alarm '{id}'."
+                    : $"Cleared alarm '{id}': {note.Trim()}",
+                UserId = currentUser.OperatorUserId,
+                UserName = currentUser.Username,
+                AdditionalData = new Dictionary<string, object?>
+                {
+                    ["clearedAtUtc"] = now,
+                    ["stationId"] = row.StationId,
+                    ["deviceId"] = row.DeviceId,
+                    ["tagId"] = row.TagId
+                }
+            }, cancellationToken);
+        }
+
+        return Result<AlarmHistoryDto>.Success(MapAlarm(row));
+    }
+
+    private static AlarmHistoryDto MapAlarm(Domain.Entities.History.AlarmHistory a) => new()
+    {
+        Id = a.Id,
+        StationId = a.StationId,
+        PlcId = a.PlcId,
+        DeviceId = a.DeviceId,
+        TagId = a.TagId,
+        DeviceName = a.DeviceName,
+        TagName = a.TagName,
+        Description = a.Description,
+        TroubleshootingGuide = a.TroubleshootingGuide,
+        Type = a.Type,
+        IsAcknowledged = a.IsAcknowledged,
+        DurationSeconds = a.DurationSeconds,
+        StartTime = a.StartTime,
+        EndTime = a.EndTime,
+        CreatedAt = a.CreatedAt
+    };
 
     public async Task<Result<PaginationResult<EventLogDto>>> GetPagedAsync(EventLogQuery query, CancellationToken cancellationToken = default)
     {

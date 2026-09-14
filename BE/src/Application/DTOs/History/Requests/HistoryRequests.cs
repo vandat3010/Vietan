@@ -22,8 +22,16 @@ public class AlarmHistoryQuery : PaginationRequest
 {
     public long? TagId { get; set; }
     public long? DeviceId { get; set; }
+    public long? StationId { get; set; }
     public string? Type { get; set; }
     public bool? IsAcknowledged { get; set; }
+
+    /// <summary>
+    /// When true, only open alarms (<c>EndTime IS NULL</c>).
+    /// Independent of <see cref="IsAcknowledged"/>.
+    /// </summary>
+    public bool? ActiveOnly { get; set; }
+
     public DateTimeOffset? From { get; set; }
     public DateTimeOffset? To { get; set; }
 }

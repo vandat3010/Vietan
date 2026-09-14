@@ -14,6 +14,23 @@ public static class Roles
 }
 
 /// <summary>
+/// SCADA operator roles stored on <c>public.Users.Role</c> (JWT role claim).
+/// Distinct from IAM <see cref="Roles"/> used by app.Users.
+/// </summary>
+public static class ScadaRoles
+{
+    public const string Viewer = "Viewer";
+    public const string Operator = "Operator";
+    public const string Admin = "Admin";
+
+    /// <summary>Comma-separated for <c>[Authorize(Roles = ...)]</c> — SCADA Admin only.</summary>
+    public const string AdminOnly = Admin;
+
+    /// <summary>SCADA Admin + IAM SuperAdmin (when same JWT role pipeline).</summary>
+    public const string Admins = Admin + "," + Roles.SuperAdmin;
+}
+
+/// <summary>
 /// Fine-grained permission keys used by <c>[Authorize(Policy = Permissions.Users.Create)]</c>.
 /// Format: "{Module}.{Action}".
 /// </summary>

@@ -53,6 +53,7 @@ public class ApplicationDbContext : DbContext
     public DbSet<ScadaPasswordResetToken> ScadaPasswordResetTokens => Set<ScadaPasswordResetToken>();
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<SystemLicense> SystemLicenses => Set<SystemLicense>();
+    public DbSet<MapLayer> MapLayers => Set<MapLayer>();
     public DbSet<SystemAuditLog> SystemAuditLogs => Set<SystemAuditLog>();
     public DbSet<DeviceType> DeviceTypes => Set<DeviceType>();
     public DbSet<EventType> EventTypes => Set<EventType>();

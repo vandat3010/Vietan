@@ -1,14 +1,21 @@
+using Backend.Application.Common;
 using Backend.Application.DTOs.Auth;
+using Backend.Application.Options;
 using Backend.Shared.Constants;
 using Backend.Shared.Extensions;
 using FluentValidation;
+using Microsoft.Extensions.Options;
 
 namespace Backend.Application.Validators;
 
 public class RegisterRequestValidator : AbstractValidator<RegisterRequest>
 {
-    public RegisterRequestValidator()
+    public RegisterRequestValidator(IOptions<PasswordPolicyOptions> passwordOptions)
     {
+        var opt = passwordOptions.Value;
+        var min = opt.MinLength > 0 ? opt.MinLength : PasswordComplexity.DefaultMinLength;
+        var max = opt.MaxLength > 0 ? opt.MaxLength : PasswordComplexity.DefaultMaxLength;
+
         RuleFor(x => x.Username).NotEmpty()
             .MaximumLength(ValidationConstants.UsernameMaxLength)
             .Must(u => u.IsSafeIdentifier())
@@ -29,17 +36,10 @@ public class RegisterRequestValidator : AbstractValidator<RegisterRequest>
             })
             .WithMessage("FullName must not contain control characters.");
         RuleFor(x => x.Password).NotEmpty()
-            .MinimumLength(SecurityConstants.PasswordMinLength)
-            .MaximumLength(SecurityConstants.PasswordMaxLength)
-            .Must(HasPasswordComplexity)
-            .WithMessage("Password must contain uppercase, lowercase, a digit and a special character.");
+            .Must(p => PasswordComplexity.TryValidate(
+                p, min, max, opt.RequireUppercase, opt.RequireLowercase, opt.RequireDigit, opt.RequireSpecial, out _))
+            .WithMessage($"Password must meet complexity policy (length {min}-{max}, character classes).");
     }
-
-    private static bool HasPasswordComplexity(string password) =>
-        password.Any(char.IsUpper)
-        && password.Any(char.IsLower)
-        && password.Any(char.IsDigit)
-        && password.Any(ch => !char.IsLetterOrDigit(ch));
 }
 
 public class LoginRequestValidator : AbstractValidator<LoginRequest>
@@ -78,23 +78,20 @@ public class LogoutRequestValidator : AbstractValidator<LogoutRequest>
 
 public class ChangePasswordRequestValidator : AbstractValidator<ChangePasswordRequest>
 {
-    public ChangePasswordRequestValidator()
+    public ChangePasswordRequestValidator(IOptions<PasswordPolicyOptions> passwordOptions)
     {
+        var opt = passwordOptions.Value;
+        var min = opt.MinLength > 0 ? opt.MinLength : PasswordComplexity.DefaultMinLength;
+        var max = opt.MaxLength > 0 ? opt.MaxLength : PasswordComplexity.DefaultMaxLength;
+
         RuleFor(x => x.CurrentPassword).NotEmpty().MaximumLength(SecurityConstants.PasswordMaxLength);
         RuleFor(x => x.NewPassword).NotEmpty()
-            .MinimumLength(SecurityConstants.PasswordMinLength)
-            .MaximumLength(SecurityConstants.PasswordMaxLength)
-            .Must(HasPasswordComplexity)
-            .WithMessage("Password must contain uppercase, lowercase, a digit and a special character.")
+            .Must(p => PasswordComplexity.TryValidate(
+                p, min, max, opt.RequireUppercase, opt.RequireLowercase, opt.RequireDigit, opt.RequireSpecial, out _))
+            .WithMessage($"Password must meet complexity policy (length {min}-{max}, character classes).")
             .NotEqual(x => x.CurrentPassword)
             .WithMessage("New password must be different from the current password.");
     }
-
-    private static bool HasPasswordComplexity(string password) =>
-        password.Any(char.IsUpper)
-        && password.Any(char.IsLower)
-        && password.Any(char.IsDigit)
-        && password.Any(ch => !char.IsLetterOrDigit(ch));
 }
 
 public class ForgotPasswordRequestValidator : AbstractValidator<ForgotPasswordRequest>
@@ -110,21 +107,18 @@ public class ForgotPasswordRequestValidator : AbstractValidator<ForgotPasswordRe
 
 public class ResetPasswordRequestValidator : AbstractValidator<ResetPasswordRequest>
 {
-    public ResetPasswordRequestValidator()
+    public ResetPasswordRequestValidator(IOptions<PasswordPolicyOptions> passwordOptions)
     {
+        var opt = passwordOptions.Value;
+        var min = opt.MinLength > 0 ? opt.MinLength : PasswordComplexity.DefaultMinLength;
+        var max = opt.MaxLength > 0 ? opt.MaxLength : PasswordComplexity.DefaultMaxLength;
+
         RuleFor(x => x.Token).NotEmpty().MaximumLength(ValidationConstants.TokenMaxLength);
         RuleFor(x => x.NewPassword).NotEmpty()
-            .MinimumLength(SecurityConstants.PasswordMinLength)
-            .MaximumLength(SecurityConstants.PasswordMaxLength)
-            .Must(HasPasswordComplexity)
-            .WithMessage("Password must contain uppercase, lowercase, a digit and a special character.");
+            .Must(p => PasswordComplexity.TryValidate(
+                p, min, max, opt.RequireUppercase, opt.RequireLowercase, opt.RequireDigit, opt.RequireSpecial, out _))
+            .WithMessage($"Password must meet complexity policy (length {min}-{max}, character classes).");
     }
-
-    private static bool HasPasswordComplexity(string password) =>
-        password.Any(char.IsUpper)
-        && password.Any(char.IsLower)
-        && password.Any(char.IsDigit)
-        && password.Any(ch => !char.IsLetterOrDigit(ch));
 }
 
 // --- Legacy IAM DTOs (app.Users) — kept while IAuthService remains registered ---
@@ -154,13 +148,5 @@ public class LoginValidator : AbstractValidator<LoginDto>
     {
         RuleFor(x => x.Email).NotEmpty().EmailAddress().MaximumLength(ValidationConstants.EmailMaxLength);
         RuleFor(x => x.Password).NotEmpty().MaximumLength(SecurityConstants.PasswordMaxLength);
-    }
-}
-
-public class RefreshTokenValidator : AbstractValidator<RefreshTokenRequestDto>
-{
-    public RefreshTokenValidator()
-    {
-        RuleFor(x => x.RefreshToken).NotEmpty().MaximumLength(ValidationConstants.TokenMaxLength);
     }
 }

@@ -15,6 +15,7 @@ BE **không** đếm idle, **không** có heartbeat/activity API, **không** lư
 - Normal users cannot use the reserved Admin slot.
 - Admin login always succeeds up to reserved admin capacity; if admin slots are full, the **oldest admin session** is replaced.
 - License rows in `app.system_licenses` can raise `MaxConcurrentUsers` when enabled and within validity.
+- Admin CRUD: `GET/POST/PUT/DELETE /api/v1/licenses` (key **masked** on read). Status: `GET /api/v1/licenses/concurrent-users`.
 - Redis required; if Redis is down, login fails (fail-safe).
 
 ## Config

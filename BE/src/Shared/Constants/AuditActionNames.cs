@@ -20,4 +20,19 @@ public static class AuditActionNames
     public const string PasswordChanged = "PasswordChanged";
     public const string ConfigurationChanged = "ConfigurationChanged";
     public const string RefreshTokenReuse = "RefreshTokenReuse";
+
+    public const string CreateUser = "CreateUser";
+    public const string UpdateUser = "UpdateUser";
+    public const string DeactivateUser = "DeactivateUser";
+    public const string UpdateStation = "UpdateStation";
+
+    public const string AcknowledgeAlarm = "AcknowledgeAlarm";
+    public const string ClearAlarm = "ClearAlarm";
+    public const string CreateLicense = "CreateLicense";
+    public const string UpdateLicense = "UpdateLicense";
+    public const string DeactivateLicense = "DeactivateLicense";
+    public const string CreateMapLayer = "CreateMapLayer";
+    public const string UpdateMapLayer = "UpdateMapLayer";
+    public const string DeleteMapLayer = "DeleteMapLayer";
+    public const string ClientEvent = "ClientEvent";
 }

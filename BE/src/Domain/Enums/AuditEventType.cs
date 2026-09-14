@@ -17,5 +17,14 @@ public enum AuditEventType
     ApiError = 2,
 
     /// <summary>Unhandled/system-level failure (5xx, infrastructure error).</summary>
-    SystemError = 3
+    SystemError = 3,
+
+    /// <summary>Configuration / admin metadata change (users, session policy, station).</summary>
+    Configuration = 4,
+
+    /// <summary>Client-reported UX / secondary events (never trusted for security facts).</summary>
+    ClientEvent = 5,
+
+    /// <summary>Alarm acknowledge / clear / industrial alarm lifecycle.</summary>
+    Alarm = 6
 }

@@ -5,7 +5,14 @@ Quy uoc:
 - Base: /api/v1
 - Response boc ApiResponse: { success, message, data, errors, traceId, timestampUtc }
 - Tam thoi KHONG phan trang (data.items = full list)
-- Auth dang TAT (TAM-TAT-LOGIN) — goi API khong can token
+- Auth dang BAT — can Bearer JWT (tru login/register/refresh).
+- SCADA Admin role: Viewer / Operator / Admin.
+- Map layers: GET/POST/PATCH/DELETE /api/v1/map-layers (Admin mutate).
+- Dashboard stations: dung GET /api/v1/stations (co lat/lng); realtime qua Redis/SignalR.
+- Team: FE mock — chua co BE.
+- Alarm ack/clear: POST /api/v1/alarm-histories/{id}/acknowledge|clear
+- Client audit POST /api/v1/audit-logs — khong thay the BE audit Login/Export/...
+- License CRUD: /api/v1/licenses (Admin); key masked.
 - Domain DB: station -> plc -> device -> tag -> history.history_1s (join bang Id)
 - Format moi muc:
     Controller / File / Method / Path / DB JOIN / INPUT / OUTPUT / JSON / STATUS / MESSAGE / Summary
@@ -752,9 +759,10 @@ GET    /api/v1/users/{userId}                        | Lay chi tiet 1 user      
 ================================================================================
 GHI CHU
 ================================================================================
-- Auth dang TAT (TAM-TAT-LOGIN).
+- Auth dang BAT — can Bearer JWT.
 - Electrical va Schematic la 2 API rieng.
 - interval history: 1s | 1m | 30m
+- Map layers / licenses / alarm ack-clear: xem Tong_Quan_API_Service_DTO.md
 
 GHI CHU STATUS / MESSAGE (constant + enum):
   HTTP     : ScadaHttpStatuses.Ok=200, NotFound=404, BadRequest=400

@@ -89,7 +89,7 @@ Action thin: `=> this.ToActionResult(await service..., message)`.
 Lỗi nghiệp vụ / exception → `Result` → `ApiResponse` (không throw lên FE).
 
 ### 1.7 Auth
-Hiện **tạm tắt** (`TAM-TAT-LOGIN`). Bật lại JWT khi deploy.
+Hiện **JWT đang bật**. Mọi endpoint SCADA yêu cầu Bearer (trừ Auth anonymous).
 
 ---
 
@@ -304,7 +304,7 @@ GET /api/v1/stations/{stationId}/reports/pump-temperatures
    - id  > 0  → GET .../reports/pump-temperatures?deviceId={id}&...
 3. Đổi trang     → cùng URL + pageNumber
 4. Làm mới       → reset reportDate/start/end + pageNumber=1
-5. Xuất Excel    → (chưa implement) cùng filter, không phân trang
+5. Xuất Excel    → `GET .../reports/table/export` (Operator/Admin), cap 10_000 rows
 ```
 
 ---

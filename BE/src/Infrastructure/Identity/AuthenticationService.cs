@@ -35,12 +35,14 @@ public class AuthenticationService(
     IOptions<JwtSettings> jwtOptions,
     IOptions<AuthSettings> authOptions,
     IOptions<LoginSecurityOptions> loginOptions,
+    IOptions<PasswordPolicyOptions> passwordOptions,
     IHostEnvironment environment,
     ILogger<AuthenticationService> logger) : IAuthenticationService
 {
     private readonly JwtSettings _jwt = jwtOptions.Value;
     private readonly AuthSettings _auth = authOptions.Value;
     private readonly LoginSecurityOptions _login = loginOptions.Value;
+    private readonly PasswordPolicyOptions _password = passwordOptions.Value;
 
     // Process-wide decoy Argon2id hash: verified on the missing/disabled-user path
     // so password verification does real work regardless of account existence,
@@ -690,27 +692,14 @@ public class AuthenticationService(
         return Convert.ToHexString(bytes);
     }
 
-    private static bool IsPasswordValid(string password, out string error)
-    {
-        if (string.IsNullOrEmpty(password) || password.Length < SecurityConstants.PasswordMinLength)
-        {
-            error = $"Password must be at least {SecurityConstants.PasswordMinLength} characters.";
-            return false;
-        }
-
-        if (!password.Any(char.IsUpper) || !password.Any(char.IsLower) || !password.Any(char.IsDigit))
-        {
-            error = "Password must contain uppercase, lowercase and a digit.";
-            return false;
-        }
-
-        if (!password.Any(ch => !char.IsLetterOrDigit(ch)))
-        {
-            error = "Password must contain at least one special character.";
-            return false;
-        }
-
-        error = string.Empty;
-        return true;
-    }
+    private bool IsPasswordValid(string password, out string error) =>
+        PasswordComplexity.TryValidate(
+            password,
+            _password.MinLength > 0 ? _password.MinLength : PasswordComplexity.DefaultMinLength,
+            _password.MaxLength > 0 ? _password.MaxLength : PasswordComplexity.DefaultMaxLength,
+            _password.RequireUppercase,
+            _password.RequireLowercase,
+            _password.RequireDigit,
+            _password.RequireSpecial,
+            out error);
 }

@@ -3,6 +3,7 @@ using Backend.Application.Interfaces.Services.Scada;
 using Backend.Shared.Constants;
 using Backend.Shared.Pagination;
 using Backend.Shared.Responses;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Backend.Api.Controllers.Scada;
@@ -11,23 +12,17 @@ namespace Backend.Api.Controllers.Scada;
 [ApiController]
 [Route("api/v1/history")]
 [Produces("application/json")]
+[Authorize]
 public class HistorySamplesController(IHistorySampleQueryService history) : ControllerBase
 {
-    /// <summary>
-    /// Lịch sử tag theo chu kỳ 1 giây.
-    /// Status : 200 OK | 400 Yêu cầu không hợp lệ | 500 Lỗi không mong đợi
-    /// </summary>
     [HttpGet("1s")]
     [ProducesResponseType(typeof(ApiResponse<PaginationResult<HistorySampleDto>>), ScadaHttpStatuses.Ok)]
     [ProducesResponseType(typeof(ApiResponse<PaginationResult<HistorySampleDto>>), ScadaHttpStatuses.BadRequest)]
+    [ProducesResponseType(typeof(ApiResponse<PaginationResult<HistorySampleDto>>), ScadaHttpStatuses.Unauthorized)]
     [ProducesResponseType(typeof(ApiResponse<PaginationResult<HistorySampleDto>>), ScadaHttpStatuses.InternalServerError)]
     public async Task<IActionResult> Get1s([FromQuery] HistorySampleQuery query, CancellationToken cancellationToken) =>
         this.ToActionResult(await history.Get1sAsync(query, cancellationToken), "Lịch sử tag 1s.");
 
-    /// <summary>
-    /// Lịch sử tag theo chu kỳ 1 phút.
-    /// Status : 200 OK | 400 Yêu cầu không hợp lệ | 500 Lỗi không mong đợi
-    /// </summary>
     [HttpGet("1m")]
     [ProducesResponseType(typeof(ApiResponse<PaginationResult<HistorySampleDto>>), ScadaHttpStatuses.Ok)]
     [ProducesResponseType(typeof(ApiResponse<PaginationResult<HistorySampleDto>>), ScadaHttpStatuses.BadRequest)]
@@ -35,10 +30,6 @@ public class HistorySamplesController(IHistorySampleQueryService history) : Cont
     public async Task<IActionResult> Get1m([FromQuery] HistorySampleQuery query, CancellationToken cancellationToken) =>
         this.ToActionResult(await history.Get1mAsync(query, cancellationToken), "Lịch sử tag 1m.");
 
-    /// <summary>
-    /// Lịch sử tag theo chu kỳ 30 phút.
-    /// Status : 200 OK | 400 Yêu cầu không hợp lệ | 500 Lỗi không mong đợi
-    /// </summary>
     [HttpGet("30m")]
     [ProducesResponseType(typeof(ApiResponse<PaginationResult<HistorySampleDto>>), ScadaHttpStatuses.Ok)]
     [ProducesResponseType(typeof(ApiResponse<PaginationResult<HistorySampleDto>>), ScadaHttpStatuses.BadRequest)]
@@ -51,50 +42,78 @@ public class HistorySamplesController(IHistorySampleQueryService history) : Cont
 [ApiController]
 [Route("api/v1/alarm-histories")]
 [Produces("application/json")]
+[Authorize]
 public class AlarmHistoriesController(IAlarmHistoryQueryService alarms) : ControllerBase
 {
-    /// <summary>
-    /// Danh sách alarm history.
-    /// Status : 200 OK | 500 Lỗi không mong đợi
-    /// </summary>
     [HttpGet]
     [ProducesResponseType(typeof(ApiResponse<PaginationResult<AlarmHistoryDto>>), ScadaHttpStatuses.Ok)]
+    [ProducesResponseType(typeof(ApiResponse<PaginationResult<AlarmHistoryDto>>), ScadaHttpStatuses.Unauthorized)]
     [ProducesResponseType(typeof(ApiResponse<PaginationResult<AlarmHistoryDto>>), ScadaHttpStatuses.InternalServerError)]
     public async Task<IActionResult> GetAll([FromQuery] AlarmHistoryQuery query, CancellationToken cancellationToken) =>
         this.ToActionResult(await alarms.GetPagedAsync(query, cancellationToken), "Danh sách alarm history.");
 
     /// <summary>
-    /// Chi tiết 1 alarm history theo Id.
-    /// Status : 200 OK | 404 Không tìm thấy | 500 Lỗi không mong đợi
+    /// Alarm đang mở toàn hệ thống (<c>EndTime IS NULL</c>).
+    /// Lọc thêm stationId / isAcknowledged / deviceId qua query.
     /// </summary>
+    [HttpGet("active")]
+    [ProducesResponseType(typeof(ApiResponse<PaginationResult<AlarmHistoryDto>>), ScadaHttpStatuses.Ok)]
+    [ProducesResponseType(typeof(ApiResponse<PaginationResult<AlarmHistoryDto>>), ScadaHttpStatuses.Unauthorized)]
+    public async Task<IActionResult> GetActive([FromQuery] AlarmHistoryQuery query, CancellationToken cancellationToken)
+    {
+        query.ActiveOnly = true;
+        return this.ToActionResult(await alarms.GetPagedAsync(query, cancellationToken), "Danh sách alarm đang mở.");
+    }
+
     [HttpGet("{id:long}")]
     [ProducesResponseType(typeof(ApiResponse<AlarmHistoryDto>), ScadaHttpStatuses.Ok)]
     [ProducesResponseType(typeof(ApiResponse<AlarmHistoryDto>), ScadaHttpStatuses.NotFound)]
     [ProducesResponseType(typeof(ApiResponse<AlarmHistoryDto>), ScadaHttpStatuses.InternalServerError)]
     public async Task<IActionResult> GetById(long id, CancellationToken cancellationToken) =>
         this.ToActionResult(await alarms.GetByIdAsync(id, cancellationToken), "Chi tiết alarm history.");
+
+    /// <summary>Acknowledge alarm — Operator/Admin. Idempotent.</summary>
+    [HttpPost("{id:long}/acknowledge")]
+    [Authorize(Roles = ScadaRoles.Operator + "," + ScadaRoles.Admin)]
+    [ProducesResponseType(typeof(ApiResponse<AlarmHistoryDto>), ScadaHttpStatuses.Ok)]
+    [ProducesResponseType(typeof(ApiResponse<AlarmHistoryDto>), ScadaHttpStatuses.NotFound)]
+    [ProducesResponseType(typeof(ApiResponse<AlarmHistoryDto>), ScadaHttpStatuses.Forbidden)]
+    public async Task<IActionResult> Acknowledge(
+        long id,
+        [FromBody] AlarmCommandRequest? request,
+        CancellationToken cancellationToken) =>
+        this.ToActionResult(
+            await alarms.AcknowledgeAsync(id, request?.Note, cancellationToken),
+            "Đã xác nhận alarm.");
+
+    /// <summary>Clear open alarm (EndTime = UtcNow) — Operator/Admin. Keeps history row.</summary>
+    [HttpPost("{id:long}/clear")]
+    [Authorize(Roles = ScadaRoles.Operator + "," + ScadaRoles.Admin)]
+    [ProducesResponseType(typeof(ApiResponse<AlarmHistoryDto>), ScadaHttpStatuses.Ok)]
+    [ProducesResponseType(typeof(ApiResponse<AlarmHistoryDto>), ScadaHttpStatuses.NotFound)]
+    public async Task<IActionResult> Clear(
+        long id,
+        [FromBody] AlarmCommandRequest? request,
+        CancellationToken cancellationToken) =>
+        this.ToActionResult(
+            await alarms.ClearAsync(id, request?.Note, cancellationToken),
+            "Đã clear alarm.");
 }
 
 /// <summary>API nhật ký sự kiện SCADA.</summary>
 [ApiController]
 [Route("api/v1/event-logs")]
 [Produces("application/json")]
+[Authorize]
 public class EventLogsController(IScadaEventLogQueryService events) : ControllerBase
 {
-    /// <summary>
-    /// Danh sách event log.
-    /// Status : 200 OK | 500 Lỗi không mong đợi
-    /// </summary>
     [HttpGet]
     [ProducesResponseType(typeof(ApiResponse<PaginationResult<EventLogDto>>), ScadaHttpStatuses.Ok)]
+    [ProducesResponseType(typeof(ApiResponse<PaginationResult<EventLogDto>>), ScadaHttpStatuses.Unauthorized)]
     [ProducesResponseType(typeof(ApiResponse<PaginationResult<EventLogDto>>), ScadaHttpStatuses.InternalServerError)]
     public async Task<IActionResult> GetAll([FromQuery] EventLogQuery query, CancellationToken cancellationToken) =>
         this.ToActionResult(await events.GetPagedAsync(query, cancellationToken), "Danh sách event log.");
 
-    /// <summary>
-    /// Chi tiết 1 event log theo Id.
-    /// Status : 200 OK | 404 Không tìm thấy | 500 Lỗi không mong đợi
-    /// </summary>
     [HttpGet("{id:long}")]
     [ProducesResponseType(typeof(ApiResponse<EventLogDto>), ScadaHttpStatuses.Ok)]
     [ProducesResponseType(typeof(ApiResponse<EventLogDto>), ScadaHttpStatuses.NotFound)]
@@ -107,22 +126,16 @@ public class EventLogsController(IScadaEventLogQueryService events) : Controller
 [ApiController]
 [Route("api/v1/user-activity-logs")]
 [Produces("application/json")]
+[Authorize]
 public class UserActivityLogsController(IUserActivityLogQueryService logs) : ControllerBase
 {
-    /// <summary>
-    /// Danh sách user activity log.
-    /// Status : 200 OK | 500 Lỗi không mong đợi
-    /// </summary>
     [HttpGet]
     [ProducesResponseType(typeof(ApiResponse<PaginationResult<UserActivityLogDto>>), ScadaHttpStatuses.Ok)]
+    [ProducesResponseType(typeof(ApiResponse<PaginationResult<UserActivityLogDto>>), ScadaHttpStatuses.Unauthorized)]
     [ProducesResponseType(typeof(ApiResponse<PaginationResult<UserActivityLogDto>>), ScadaHttpStatuses.InternalServerError)]
     public async Task<IActionResult> GetAll([FromQuery] UserActivityLogQuery query, CancellationToken cancellationToken) =>
         this.ToActionResult(await logs.GetPagedAsync(query, cancellationToken), "Danh sách user activity log.");
 
-    /// <summary>
-    /// Chi tiết 1 user activity log theo Id.
-    /// Status : 200 OK | 404 Không tìm thấy | 500 Lỗi không mong đợi
-    /// </summary>
     [HttpGet("{id:long}")]
     [ProducesResponseType(typeof(ApiResponse<UserActivityLogDto>), ScadaHttpStatuses.Ok)]
     [ProducesResponseType(typeof(ApiResponse<UserActivityLogDto>), ScadaHttpStatuses.NotFound)]

@@ -16,6 +16,12 @@ public interface IAlarmHistoryQueryService
 {
     Task<Result<PaginationResult<AlarmHistoryDto>>> GetPagedAsync(AlarmHistoryQuery query, CancellationToken cancellationToken = default);
     Task<Result<AlarmHistoryDto>> GetByIdAsync(long id, CancellationToken cancellationToken = default);
+
+    /// <summary>Operator ack — sets <c>IsAcknowledged = true</c> (idempotent).</summary>
+    Task<Result<AlarmHistoryDto>> AcknowledgeAsync(long id, string? note, CancellationToken cancellationToken = default);
+
+    /// <summary>Clear open alarm — sets <c>EndTime = UtcNow</c> (keeps history row).</summary>
+    Task<Result<AlarmHistoryDto>> ClearAsync(long id, string? note, CancellationToken cancellationToken = default);
 }
 
 public interface IScadaEventLogQueryService

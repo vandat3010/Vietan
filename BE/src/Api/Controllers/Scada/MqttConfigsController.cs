@@ -2,14 +2,16 @@ using Backend.Application.DTOs.Scada;
 using Backend.Application.Interfaces.Services.Scada;
 using Backend.Shared.Constants;
 using Backend.Shared.Responses;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Backend.Api.Controllers.Scada;
 
-/// <summary>API cấu hình MQTT (scada.mqtt_config).</summary>
+/// <summary>API cấu hình MQTT (scada.mqtt_config) — Admin only.</summary>
 [ApiController]
 [Route("api/v1/mqtt-configs")]
 [Produces("application/json")]
+[Authorize(Roles = ScadaRoles.AdminOnly)]
 public class MqttConfigsController(IMqttConfigQueryService configs) : ControllerBase
 {
     /// <summary>

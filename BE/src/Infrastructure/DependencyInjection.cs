@@ -150,6 +150,20 @@ public static class DependencyInjection
         services.Configure<AuthSettings>(configuration.GetSection(AuthSettings.SectionName));
         services.Configure<ConcurrentSessionOptions>(configuration.GetSection(ConcurrentSessionOptions.SectionName));
 
+        // Password complexity + expiry (distinct from Login lockout and session idle).
+        services.AddOptions<PasswordPolicyOptions>()
+            .Bind(configuration.GetSection(PasswordPolicyOptions.SectionName))
+            .Validate(o =>
+                    o.ExpireDays > 0
+                    && o.WarnBeforeDays >= 0
+                    && o.WarnBeforeDays < o.ExpireDays
+                    && o.MinLength >= 1
+                    && o.MaxLength >= o.MinLength
+                    && o.ExpirationCheckIntervalMinutes > 0,
+                "Invalid 'Password' configuration (ExpireDays, WarnBeforeDays, Min/MaxLength).")
+            .ValidateOnStart();
+        services.AddSingleton<IPasswordExpirationPolicy, PasswordExpirationPolicy>();
+
         // BE 1.4 — failed-login limiting / lockout thresholds. Validated on start
         // so an invalid config cannot silently disable brute-force protection.
         services.AddOptions<LoginSecurityOptions>()
@@ -162,6 +176,9 @@ public static class DependencyInjection
         services.AddScoped<IScadaTokenService, ScadaTokenService>();
         services.AddScoped<IAuthenticationService, AuthenticationService>();
         services.AddScoped<IConcurrentLicenseService, ConcurrentLicenseService>();
+        services.AddScoped<ISystemLicenseAdminService, SystemLicenseAdminService>();
+        services.AddScoped<IMapLayerService, MapLayerService>();
+        services.AddScoped<IClientAuditService, ClientAuditService>();
         services.AddSingleton<IConcurrentSessionService, RedisConcurrentSessionService>();
         // Redis failed-login counter — reuses the shared IConnectionMultiplexer below.
         services.AddSingleton<ILoginAttemptService, RedisLoginAttemptService>();

@@ -1,7 +1,9 @@
 using Backend.Application.DTOs.Audit;
 using Backend.Application.DTOs.Auth;
+using Backend.Application.Options;
 using Backend.Application.Validators;
 using Backend.Shared.Constants;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Backend.UnitTests;
@@ -58,10 +60,13 @@ public class T4SecurityAuditTests
 
     // --- T4.4 §10: change-password rules ---
 
+    private static ChangePasswordRequestValidator CreateChangePasswordValidator() =>
+        new(Options.Create(new PasswordPolicyOptions()));
+
     [Fact]
     public void ChangePasswordValidator_NewEqualsCurrent_Fails()
     {
-        var result = new ChangePasswordRequestValidator().Validate(
+        var result = CreateChangePasswordValidator().Validate(
             new ChangePasswordRequest { CurrentPassword = "Abcd1234!", NewPassword = "Abcd1234!" });
         Assert.False(result.IsValid);
     }
@@ -69,7 +74,7 @@ public class T4SecurityAuditTests
     [Fact]
     public void ChangePasswordValidator_WeakNewPassword_Fails()
     {
-        var result = new ChangePasswordRequestValidator().Validate(
+        var result = CreateChangePasswordValidator().Validate(
             new ChangePasswordRequest { CurrentPassword = "Abcd1234!", NewPassword = "alllowercase" });
         Assert.False(result.IsValid);
     }
@@ -77,7 +82,7 @@ public class T4SecurityAuditTests
     [Fact]
     public void ChangePasswordValidator_StrongDifferentPassword_Passes()
     {
-        var result = new ChangePasswordRequestValidator().Validate(
+        var result = CreateChangePasswordValidator().Validate(
             new ChangePasswordRequest { CurrentPassword = "Abcd1234!", NewPassword = "Xyz9876#$" });
         Assert.True(result.IsValid);
     }

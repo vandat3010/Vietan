@@ -50,3 +50,8 @@ public class UserActivityLogDto
     public string? IpAddress { get; set; }
     public string? Status { get; set; }
 }
+
+public class AlarmCommandRequest
+{
+    public string? Note { get; set; }
+}

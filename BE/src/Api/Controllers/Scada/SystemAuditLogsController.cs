@@ -16,7 +16,7 @@ namespace Backend.Api.Controllers.Scada;
 [ApiController]
 [Route("api/v1/system-audit-logs")]
 [Produces("application/json")]
-[Authorize(Roles = Roles.Admin + "," + Roles.SuperAdmin)]
+[Authorize(Roles = ScadaRoles.Admin + "," + Roles.SuperAdmin)]
 public class SystemAuditLogsController(ISystemAuditLogQueryService auditLogs) : ControllerBase
 {
     /// <summary>

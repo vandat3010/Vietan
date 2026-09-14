@@ -1,27 +1,37 @@
 using System.Globalization;
 using Backend.Application.Common;
+using Backend.Application.Configuration;
 using Backend.Application.DTOs.Scada;
+using Backend.Application.Interfaces.Services;
 using Backend.Application.Interfaces.Services.Scada;
+using Backend.Application.Options;
 using Backend.Application.Realtime;
 using Backend.Domain.Entities.Scada;
+using Backend.Domain.Enums;
 using Backend.Domain.Interfaces;
 using Backend.Infrastructure.Persistence.Context;
 using Backend.Shared.Constants;
+using Backend.Shared.Models;
 using Backend.Shared.Pagination;
 using Backend.Shared.Results;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Backend.Infrastructure.Scada;
 
 /// <summary>
-/// EF read-side for SCADA metadata (schema <c>scada</c>).
+/// EF read/write-side for SCADA metadata (schema <c>public</c> / <c>app</c>).
 /// Lỗi nghiệp vụ và exception DB đều trả <see cref="Result{T}"/> — không throw lên controller.
 /// </summary>
 public class ScadaMetadataQueryService(
     ApplicationDbContext db,
     IRealtimeDataStore realtimeStore,
     IPasswordHasher passwordHasher,
+    ICurrentUserService currentUser,
+    ISystemAuditService systemAudit,
+    IImportExportService importExport,
+    IOptions<PasswordPolicyOptions> passwordOptions,
     ILogger<ScadaMetadataQueryService> logger) :
     IStationQueryService,
     IPlcQueryService,
@@ -50,14 +60,32 @@ public class ScadaMetadataQueryService(
             logger.LogError(ex, "SCADA query failed");
             return Result<T>.Failure(
                 ScadaErrorCodes.Unexpected,
-                ScadaApiMessages.UnexpectedError,
-                ex.Message);
+                ScadaApiMessages.UnexpectedError);
         }
     }
 
+    private async Task<Result> SafeAsync(Func<Task<Result>> action)
+    {
+        try
+        {
+            return await action();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "SCADA command failed");
+            return Result.Failure(ScadaErrorCodes.Unexpected, ScadaApiMessages.UnexpectedError);
+        }
+    }
+
+    private const int MaxExportRows = 10_000;
+
     public Task<Result<PaginationResult<StationDto>>> GetPagedAsync(StationQuery query, CancellationToken cancellationToken = default) =>
         SafeAsync(async () =>
-        {
+    {
         var q = db.Stations.AsNoTracking().AsQueryable();
 
         if (query.IsActive is { } isActive)
@@ -79,6 +107,9 @@ public class ScadaMetadataQueryService(
                 Id = s.Id,
                 Code = s.Code,
                 Name = s.Name,
+                Latitude = s.Latitude,
+                Longitude = s.Longitude,
+                Address = s.Address,
                 IsActive = s.IsActive
             })
             .ToListAsync(cancellationToken);
@@ -108,6 +139,284 @@ public class ScadaMetadataQueryService(
             ? Result<StationDetailDto>.Failure(ScadaErrorCodes.StationNotFound, ScadaApiMessages.StationNotFoundFor(id))
             : Result<StationDetailDto>.Success(dto);
         });
+
+    public Task<Result<StationDetailDto>> UpdateAsync(
+        long id,
+        UpdateStationRequest request,
+        CancellationToken cancellationToken = default) =>
+        SafeAsync(async () =>
+        {
+            var station = await db.Stations.FirstOrDefaultAsync(s => s.Id == id, cancellationToken);
+            if (station is null)
+                return Result<StationDetailDto>.Failure(
+                    ScadaErrorCodes.StationNotFound,
+                    ScadaApiMessages.StationNotFoundFor(id));
+
+            if (request.Name is not null)
+            {
+                var name = request.Name.Trim();
+                if (name.Length == 0)
+                    return Result<StationDetailDto>.Failure("ValidationError", "Station name cannot be empty.");
+                if (name.Length > 200)
+                    return Result<StationDetailDto>.Failure("ValidationError", "Station name is too long.");
+                station.Name = name;
+            }
+
+            if (request.Address is not null)
+                station.Address = string.IsNullOrWhiteSpace(request.Address) ? null : request.Address.Trim();
+            if (request.Description is not null)
+                station.Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
+            if (request.Latitude is { } lat)
+            {
+                if (lat is < -90 or > 90)
+                    return Result<StationDetailDto>.Failure("ValidationError", "Latitude must be between -90 and 90.");
+                station.Latitude = lat;
+            }
+            if (request.Longitude is { } lon)
+            {
+                if (lon is < -180 or > 180)
+                    return Result<StationDetailDto>.Failure("ValidationError", "Longitude must be between -180 and 180.");
+                station.Longitude = lon;
+            }
+            if (request.IsActive is { } isActive)
+                station.IsActive = isActive;
+
+            station.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync(cancellationToken);
+
+            await systemAudit.LogAsync(new SystemAuditEntry
+            {
+                Action = AuditActionNames.UpdateStation,
+                EventType = AuditEventType.Configuration,
+                Status = AuditStatus.Success,
+                Module = "Stations",
+                EntityType = "Station",
+                EntityId = station.Id.ToString(CultureInfo.InvariantCulture),
+                Description = $"Updated station '{station.Code}'.",
+                UserId = currentUser.OperatorUserId,
+                UserName = currentUser.Username
+            }, cancellationToken);
+
+            return Result<StationDetailDto>.Success(new StationDetailDto
+            {
+                Id = station.Id,
+                Code = station.Code,
+                Name = station.Name,
+                Address = station.Address,
+                Latitude = station.Latitude,
+                Longitude = station.Longitude,
+                Description = station.Description,
+                IsActive = station.IsActive
+            });
+        });
+
+    public Task<Result<PaginationResult<ActiveAlarmRowDto>>> GetActiveAlarmsAsync(
+        long stationId,
+        ActiveAlarmQuery query,
+        CancellationToken cancellationToken = default) =>
+        SafeAsync(async () =>
+        {
+            var stationExists = await db.Stations.AsNoTracking()
+                .AnyAsync(s => s.Id == stationId, cancellationToken);
+            if (!stationExists)
+                return Result<PaginationResult<ActiveAlarmRowDto>>.Failure(
+                    ScadaErrorCodes.StationNotFound,
+                    ScadaApiMessages.StationNotFoundFor(stationId));
+
+            var stationDeviceIds = await db.Devices.AsNoTracking()
+                .Where(d => d.Plc.StationId == stationId)
+                .Select(d => d.Id)
+                .ToListAsync(cancellationToken);
+
+            var q = db.AlarmHistories.AsNoTracking()
+                .Where(a => a.EndTime == null)
+                .Where(a =>
+                    a.StationId == stationId
+                    || (a.DeviceId != null && stationDeviceIds.Contains(a.DeviceId.Value)));
+
+            if (query.DeviceId is { } deviceId && deviceId > 0)
+                q = q.Where(a => a.DeviceId == deviceId);
+            if (query.IsAcknowledged is { } ack)
+                q = q.Where(a => a.IsAcknowledged == ack);
+            if (!string.IsNullOrWhiteSpace(query.Type))
+                q = q.Where(a => a.Type == query.Type);
+            if (query.HasKeyword)
+            {
+                var keyword = query.Keyword!;
+                q = q.Where(a =>
+                    (a.DeviceName != null && a.DeviceName.Contains(keyword)) ||
+                    (a.TagName != null && a.TagName.Contains(keyword)) ||
+                    (a.Description != null && a.Description.Contains(keyword)) ||
+                    (a.Type != null && a.Type.Contains(keyword)));
+            }
+
+            var total = await q.CountAsync(cancellationToken);
+            var raw = await q
+                .OrderByDescending(a => a.StartTime)
+                .ThenByDescending(a => a.Id)
+                .Skip(query.Skip)
+                .Take(query.PageSize)
+                .Select(a => new
+                {
+                    a.Id,
+                    a.StartTime,
+                    a.EndTime,
+                    a.Type,
+                    a.Description,
+                    a.DeviceId,
+                    a.DeviceName,
+                    a.TagId,
+                    a.TagName,
+                    a.IsAcknowledged,
+                    a.StationId
+                })
+                .ToListAsync(cancellationToken);
+
+            var items = raw.Select(a =>
+            {
+                var type = string.IsNullOrWhiteSpace(a.Type) ? "ERROR" : a.Type.Trim();
+                return new ActiveAlarmRowDto
+                {
+                    Id = a.Id,
+                    StartTime = a.StartTime,
+                    EndTime = a.EndTime,
+                    Type = type,
+                    Title = BuildEventTitle(a.Description, a.DeviceName, a.TagName, type),
+                    Description = a.Description,
+                    DeviceId = a.DeviceId,
+                    DeviceName = a.DeviceName,
+                    TagId = a.TagId,
+                    TagName = a.TagName,
+                    IsAcknowledged = a.IsAcknowledged,
+                    StationId = a.StationId ?? stationId
+                };
+            }).ToList();
+
+            return Result<PaginationResult<ActiveAlarmRowDto>>.Success(
+                PaginationResult<ActiveAlarmRowDto>.Create(items, total, query));
+        });
+
+    public Task<Result<byte[]>> ExportReportTableExcelAsync(
+        long stationId,
+        StationReportTableQuery query,
+        CancellationToken cancellationToken = default) =>
+        SafeAsync(async () =>
+        {
+            query.PageNumber = 1;
+            query.PageSize = MaxExportRows;
+            var tableResult = await GetReportTableAsync(stationId, query, cancellationToken);
+            if (tableResult.IsFailure)
+                return Result<byte[]>.Failure(tableResult.ErrorCode, tableResult.Errors);
+
+            var table = tableResult.Value!;
+            var headers = new List<string> { "Thời gian" };
+            headers.AddRange(table.Columns.Select(c => c.Header));
+
+            var flat = table.Items.Select(item =>
+            {
+                var cells = new string[headers.Count];
+                cells[0] = item.Time.ToOffset(TimeSpan.FromHours(7))
+                    .ToString("dd/MM/yyyy HH:mm:ss", CultureInfo.InvariantCulture);
+                for (var i = 0; i < table.Columns.Count; i++)
+                {
+                    var col = table.Columns[i];
+                    cells[i + 1] = item.Values.TryGetValue(col.Key, out var v) && v is not null
+                        ? Convert.ToString(v, CultureInfo.InvariantCulture) ?? ""
+                        : "";
+                }
+                return new ExportCellRow { Cells = cells, Headers = headers };
+            }).ToList();
+
+            var columns = headers
+                .Select((h, i) => new ExcelColumn<ExportCellRow>(h, row => row.Cells.Length > i ? row.Cells[i] : ""))
+                .ToList();
+
+            var bytes = await importExport.ExportExcelAsync(flat, columns, "BaoCao", cancellationToken);
+            await AuditExportAsync("StationReport", stationId.ToString(CultureInfo.InvariantCulture), bytes.Length, cancellationToken);
+            return Result<byte[]>.Success(bytes);
+        });
+
+    public Task<Result<byte[]>> ExportEventHistoryExcelAsync(
+        long stationId,
+        StationEventHistoryQuery query,
+        CancellationToken cancellationToken = default) =>
+        SafeAsync(async () =>
+        {
+            query.PageNumber = 1;
+            query.PageSize = MaxExportRows;
+            var result = await GetEventHistoryAsync(stationId, query, cancellationToken);
+            if (result.IsFailure)
+                return Result<byte[]>.Failure(result.ErrorCode, result.Errors);
+
+            var rows = result.Value!.Items.Select(r => new
+            {
+                ThoiGian = r.StartTime.ToOffset(TimeSpan.FromHours(7)).ToString("dd/MM/yyyy HH:mm:ss", CultureInfo.InvariantCulture),
+                Loai = r.Type,
+                TieuDe = r.Title,
+                MoTa = r.Description,
+                ThietBi = r.DeviceName,
+                Tag = r.TagName,
+                KetThuc = r.EndTime?.ToOffset(TimeSpan.FromHours(7)).ToString("dd/MM/yyyy HH:mm:ss", CultureInfo.InvariantCulture)
+            });
+
+            var bytes = await importExport.ExportExcelAsync(rows, "SuKien", cancellationToken);
+            await AuditExportAsync("EventHistory", stationId.ToString(CultureInfo.InvariantCulture), bytes.Length, cancellationToken);
+            return Result<byte[]>.Success(bytes);
+        });
+
+    public Task<Result<byte[]>> ExportActiveAlarmsExcelAsync(
+        long stationId,
+        ActiveAlarmQuery query,
+        CancellationToken cancellationToken = default) =>
+        SafeAsync(async () =>
+        {
+            query.PageNumber = 1;
+            query.PageSize = MaxExportRows;
+            var result = await GetActiveAlarmsAsync(stationId, query, cancellationToken);
+            if (result.IsFailure)
+                return Result<byte[]>.Failure(result.ErrorCode, result.Errors);
+
+            var rows = result.Value!.Items.Select(r => new
+            {
+                ThoiGian = r.StartTime.ToOffset(TimeSpan.FromHours(7)).ToString("dd/MM/yyyy HH:mm:ss", CultureInfo.InvariantCulture),
+                Loai = r.Type,
+                TieuDe = r.Title,
+                MoTa = r.Description,
+                ThietBi = r.DeviceName,
+                Tag = r.TagName,
+                DaXacNhan = r.IsAcknowledged ? "Có" : "Không"
+            });
+
+            var bytes = await importExport.ExportExcelAsync(rows, "LoiTonTai", cancellationToken);
+            await AuditExportAsync("ActiveAlarms", stationId.ToString(CultureInfo.InvariantCulture), bytes.Length, cancellationToken);
+            return Result<byte[]>.Success(bytes);
+        });
+
+    private sealed class ExportCellRow
+    {
+        public required string[] Cells { get; init; }
+        public required IReadOnlyList<string> Headers { get; init; }
+    }
+
+    private Task AuditExportAsync(string entityType, string entityId, int sizeBytes, CancellationToken cancellationToken) =>
+        systemAudit.LogAsync(new SystemAuditEntry
+        {
+            Action = AuditActionNames.Export,
+            EventType = AuditEventType.DataExport,
+            Status = AuditStatus.Success,
+            Module = "Export",
+            EntityType = entityType,
+            EntityId = entityId,
+            Description = $"Exported {entityType} to Excel.",
+            UserId = currentUser.OperatorUserId,
+            UserName = currentUser.Username,
+            AdditionalData = new Dictionary<string, object?>
+            {
+                ["format"] = "xlsx",
+                ["sizeBytes"] = sizeBytes,
+                ["maxRows"] = MaxExportRows
+            }
+        }, cancellationToken);
 
     public Task<Result<StationElectricalDto>> GetElectricalAsync(
         long stationId,
@@ -2339,7 +2648,7 @@ public class ScadaMetadataQueryService(
                 && !string.Equals(request.Password, request.ConfirmPassword, StringComparison.Ordinal))
                 return Result<ScadaUserDto>.Failure("Auth.Validation", "Confirm password does not match.");
 
-            if (!TryValidateCreatePassword(request.Password, out var passwordError))
+            if (!TryValidatePassword(request.Password, out var passwordError))
                 return Result<ScadaUserDto>.Failure("Auth.PasswordPolicy", passwordError);
 
             var fullName = (request.FullName ?? string.Empty).Trim();
@@ -2360,6 +2669,7 @@ public class ScadaMetadataQueryService(
                 return Result<ScadaUserDto>.Failure("Auth.UsernameTaken", "Username is already taken.");
 
             var now = DateTimeOffset.UtcNow;
+            var actor = currentUser.Username;
             var user = new ScadaUser
             {
                 Username = username,
@@ -2374,6 +2684,8 @@ public class ScadaMetadataQueryService(
                 Description = NullIfWhiteSpace(request.Description),
                 Level = request.Level,
                 PasswordUpdatedAt = request.MustChangePassword ? null : now,
+                CreatedBy = actor,
+                UpdatedBy = actor,
                 CreatedAt = now,
                 UpdatedAt = now
             };
@@ -2381,7 +2693,137 @@ public class ScadaMetadataQueryService(
             db.ScadaUsers.Add(user);
             await db.SaveChangesAsync(cancellationToken);
 
+            await systemAudit.LogAsync(new SystemAuditEntry
+            {
+                Action = AuditActionNames.CreateUser,
+                EventType = AuditEventType.Configuration,
+                Status = AuditStatus.Success,
+                Module = "ScadaUsers",
+                EntityType = "ScadaUser",
+                EntityId = user.Id.ToString(CultureInfo.InvariantCulture),
+                Description = $"Created SCADA user '{user.Username}'.",
+                UserId = currentUser.OperatorUserId,
+                UserName = actor
+            }, cancellationToken);
+
             return Result<ScadaUserDto>.Success(MapScadaUserDto(user, now));
+        });
+
+    public Task<Result<ScadaUserDto>> UpdateAsync(
+        long id,
+        UpdateScadaUserRequest request,
+        CancellationToken cancellationToken = default) =>
+        SafeAsync(async () =>
+        {
+            var user = await db.ScadaUsers.FirstOrDefaultAsync(u => u.Id == id, cancellationToken);
+            if (user is null)
+                return Result<ScadaUserDto>.Failure("ScadaUser.NotFound", $"SCADA user '{id}' was not found.");
+
+            if (request.FullName is not null)
+            {
+                var fullName = request.FullName.Trim();
+                if (fullName.Length == 0)
+                    return Result<ScadaUserDto>.Failure("Auth.Validation", "Full name cannot be empty.");
+                user.FullName = fullName;
+            }
+
+            if (request.Email is not null)
+            {
+                var email = NullIfWhiteSpace(request.Email);
+                if (email is not null)
+                {
+                    var emailTaken = await db.ScadaUsers.AnyAsync(
+                        u => u.Id != id && u.Email == email, cancellationToken);
+                    if (emailTaken)
+                        return Result<ScadaUserDto>.Failure("Auth.Conflict", "Email is already in use.");
+                }
+                user.Email = email;
+            }
+
+            if (request.Role is not null)
+            {
+                var role = NormalizeScadaRole(request.Role);
+                if (role is null)
+                    return Result<ScadaUserDto>.Failure(
+                        "Auth.Validation",
+                        "Role must be viewer, Operator, or Administrator.");
+                user.Role = role;
+            }
+
+            if (request.Level is { } level)
+            {
+                if (level < 1 || level > 100)
+                    return Result<ScadaUserDto>.Failure("Auth.Validation", "Level must be between 1 and 100.");
+                user.Level = level;
+            }
+
+            if (request.Department is not null)
+                user.Department = NullIfWhiteSpace(request.Department);
+            if (request.Position is not null)
+                user.Position = NullIfWhiteSpace(request.Position);
+            if (request.Unit is not null)
+                user.Unit = NullIfWhiteSpace(request.Unit);
+            if (request.Description is not null)
+                user.Description = NullIfWhiteSpace(request.Description);
+            if (request.IsActive is { } isActive)
+                user.IsActive = isActive;
+            if (request.MustChangePassword is { } mustChange)
+                user.MustChangePassword = mustChange;
+
+            var now = DateTimeOffset.UtcNow;
+            user.UpdatedAt = now;
+            user.UpdatedBy = currentUser.Username;
+
+            await db.SaveChangesAsync(cancellationToken);
+
+            await systemAudit.LogAsync(new SystemAuditEntry
+            {
+                Action = AuditActionNames.UpdateUser,
+                EventType = AuditEventType.Configuration,
+                Status = AuditStatus.Success,
+                Module = "ScadaUsers",
+                EntityType = "ScadaUser",
+                EntityId = user.Id.ToString(CultureInfo.InvariantCulture),
+                Description = $"Updated SCADA user '{user.Username}'.",
+                UserId = currentUser.OperatorUserId,
+                UserName = currentUser.Username
+            }, cancellationToken);
+
+            return Result<ScadaUserDto>.Success(MapScadaUserDto(user, now));
+        });
+
+    public Task<Result> DeactivateAsync(long id, CancellationToken cancellationToken = default) =>
+        SafeAsync(async () =>
+        {
+            var user = await db.ScadaUsers.FirstOrDefaultAsync(u => u.Id == id, cancellationToken);
+            if (user is null)
+                return Result.Failure("ScadaUser.NotFound", $"SCADA user '{id}' was not found.");
+
+            if (currentUser.OperatorUserId is { } selfId && selfId == id)
+                return Result.Failure("Auth.Forbidden", "Cannot deactivate your own account.");
+
+            if (!user.IsActive)
+                return Result.Success();
+
+            user.IsActive = false;
+            user.UpdatedAt = DateTimeOffset.UtcNow;
+            user.UpdatedBy = currentUser.Username;
+            await db.SaveChangesAsync(cancellationToken);
+
+            await systemAudit.LogAsync(new SystemAuditEntry
+            {
+                Action = AuditActionNames.DeactivateUser,
+                EventType = AuditEventType.Configuration,
+                Status = AuditStatus.Success,
+                Module = "ScadaUsers",
+                EntityType = "ScadaUser",
+                EntityId = user.Id.ToString(CultureInfo.InvariantCulture),
+                Description = $"Deactivated SCADA user '{user.Username}'.",
+                UserId = currentUser.OperatorUserId,
+                UserName = currentUser.Username
+            }, cancellationToken);
+
+            return Result.Success();
         });
 
     private static string? NullIfWhiteSpace(string? value) =>
@@ -2390,46 +2832,29 @@ public class ScadaMetadataQueryService(
     private static string? NormalizeScadaRole(string? raw)
     {
         var role = (raw ?? string.Empty).Trim();
-        if (role.Length == 0) return "Operator";
-        if (role.Equals("viewer", StringComparison.OrdinalIgnoreCase)
-            || role.Equals("Viewer", StringComparison.OrdinalIgnoreCase))
-            return "Viewer";
+        if (role.Length == 0) return ScadaRoles.Operator;
+        if (role.Equals("viewer", StringComparison.OrdinalIgnoreCase))
+            return ScadaRoles.Viewer;
         if (role.Equals("operator", StringComparison.OrdinalIgnoreCase))
-            return "Operator";
+            return ScadaRoles.Operator;
         if (role.Equals("admin", StringComparison.OrdinalIgnoreCase)
             || role.Equals("administrator", StringComparison.OrdinalIgnoreCase))
-            return "Admin";
+            return ScadaRoles.Admin;
         return null;
     }
 
-    private static bool TryValidateCreatePassword(string? password, out string error)
+    private bool TryValidatePassword(string? password, out string error)
     {
-        if (string.IsNullOrEmpty(password) || password.Length < SecurityConstants.PasswordMinLength)
-        {
-            error = $"Password must be at least {SecurityConstants.PasswordMinLength} characters.";
-            return false;
-        }
-
-        if (password.Length > 32)
-        {
-            error = "Password must be at most 32 characters.";
-            return false;
-        }
-
-        if (!password.Any(char.IsUpper) || !password.Any(char.IsLower) || !password.Any(char.IsDigit))
-        {
-            error = "Password must contain uppercase, lowercase and a digit.";
-            return false;
-        }
-
-        if (!password.Any(ch => !char.IsLetterOrDigit(ch)))
-        {
-            error = "Password must contain at least one special character.";
-            return false;
-        }
-
-        error = string.Empty;
-        return true;
+        var opt = passwordOptions.Value;
+        return PasswordComplexity.TryValidate(
+            password,
+            opt.MinLength > 0 ? opt.MinLength : PasswordComplexity.DefaultMinLength,
+            opt.MaxLength > 0 ? opt.MaxLength : PasswordComplexity.DefaultMaxLength,
+            opt.RequireUppercase,
+            opt.RequireLowercase,
+            opt.RequireDigit,
+            opt.RequireSpecial,
+            out error);
     }
 
     private static ScadaUserDto MapScadaUserDto(ScadaUser u, DateTimeOffset now) =>
@@ -2522,6 +2947,105 @@ public class ScadaMetadataQueryService(
             : Result<AppSettingDto>.Success(dto);
     }
 
+    public Task<Result<IReadOnlyList<AppSettingCatalogItemDto>>> GetCatalogAsync(
+        CancellationToken cancellationToken = default) =>
+        SafeAsync(() =>
+        {
+            var items = AppSettingCatalog.All
+                .Select(d => new AppSettingCatalogItemDto
+                {
+                    Key = d.Key,
+                    DataType = d.DataType,
+                    Description = d.Description,
+                    Source = d.Source.ToString(),
+                    EditableViaApi = d.EditableViaApi,
+                    DefaultValue = d.DefaultValue,
+                    Min = d.Min,
+                    Max = d.Max
+                })
+                .ToList();
+            return Task.FromResult(Result<IReadOnlyList<AppSettingCatalogItemDto>>.Success(items));
+        });
+
+    public Task<Result<AppSettingDto>> UpdateByKeyAsync(
+        string settingKey,
+        UpdateAppSettingRequest request,
+        CancellationToken cancellationToken = default) =>
+        SafeAsync(async () =>
+        {
+            if (!AppSettingCatalog.TryValidateEditableValue(settingKey, request.SettingValue, out var error))
+                return Result<AppSettingDto>.Failure("ValidationError", error);
+
+            // Dedicated session endpoint remains preferred; this path keeps one allowlisted writer.
+            if (string.Equals(settingKey, AppSettingCatalog.SessionIdleTimeoutMinutes, StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(request.SettingValue, out var minutes))
+            {
+                var sessionResult = await UpdateSessionPolicyAsync(
+                    new UpdateSessionPolicyRequest { IdleTimeoutMinutes = minutes },
+                    cancellationToken);
+                if (sessionResult.IsFailure)
+                    return Result<AppSettingDto>.Failure(sessionResult.ErrorCode, sessionResult.Errors);
+
+                return await GetByKeyAsync(settingKey, cancellationToken);
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            var row = await db.AppSettings
+                .FirstOrDefaultAsync(s => s.SettingKey == settingKey, cancellationToken);
+
+            if (row is null)
+            {
+                if (!AppSettingCatalog.TryGet(settingKey, out var def))
+                    return Result<AppSettingDto>.Failure("AppSetting.NotFound", $"Unknown setting '{settingKey}'.");
+
+                row = new AppSetting
+                {
+                    SettingKey = def.Key,
+                    SettingValue = request.SettingValue,
+                    DataType = def.DataType,
+                    Description = def.Description,
+                    IsEnable = request.IsEnable ?? true,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                };
+                db.AppSettings.Add(row);
+            }
+            else
+            {
+                row.SettingValue = request.SettingValue;
+                if (request.IsEnable is { } enabled)
+                    row.IsEnable = enabled;
+                row.UpdatedAt = now;
+            }
+
+            await db.SaveChangesAsync(cancellationToken);
+
+            await systemAudit.LogAsync(new SystemAuditEntry
+            {
+                Action = AuditActionNames.ConfigurationChanged,
+                EventType = AuditEventType.Configuration,
+                Status = AuditStatus.Success,
+                Module = "AppSettings",
+                EntityType = "AppSetting",
+                EntityId = settingKey,
+                Description = $"Updated app setting '{settingKey}'.",
+                UserId = currentUser.OperatorUserId,
+                UserName = currentUser.Username
+            }, cancellationToken);
+
+            return Result<AppSettingDto>.Success(new AppSettingDto
+            {
+                Id = row.Id,
+                SettingKey = row.SettingKey,
+                SettingValue = row.SettingValue,
+                DataType = row.DataType,
+                Description = row.Description,
+                IsEnable = row.IsEnable,
+                CreatedAt = row.CreatedAt,
+                UpdatedAt = row.UpdatedAt
+            });
+        });
+
     public Task<Result<SessionPolicyDto>> GetSessionPolicyAsync(
         CancellationToken cancellationToken = default) =>
         SafeAsync(async () =>
@@ -2582,6 +3106,19 @@ public class ScadaMetadataQueryService(
             }
 
             await db.SaveChangesAsync(cancellationToken);
+
+            await systemAudit.LogAsync(new SystemAuditEntry
+            {
+                Action = AuditActionNames.ConfigurationChanged,
+                EventType = AuditEventType.Configuration,
+                Status = AuditStatus.Success,
+                Module = "SessionPolicy",
+                EntityType = "AppSetting",
+                EntityId = SessionIdleTimeoutPolicy.SettingKey,
+                Description = $"Updated idle timeout to {minutes} minutes.",
+                UserId = currentUser.OperatorUserId,
+                UserName = currentUser.Username
+            }, cancellationToken);
 
             return Result<SessionPolicyDto>.Success(new SessionPolicyDto
             {

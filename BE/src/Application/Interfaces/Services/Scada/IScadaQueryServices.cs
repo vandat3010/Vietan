@@ -52,6 +52,36 @@ public interface IStationQueryService
         StationEventHistoryQuery query,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Alarm đang mở (EndTime IS NULL) theo station.</summary>
+    Task<Result<PaginationResult<ActiveAlarmRowDto>>> GetActiveAlarmsAsync(
+        long stationId,
+        ActiveAlarmQuery query,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Cập nhật metadata trạm.</summary>
+    Task<Result<StationDetailDto>> UpdateAsync(
+        long id,
+        UpdateStationRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Xuất Excel bảng báo cáo (history_30m) — tối đa MaxExportRows.</summary>
+    Task<Result<byte[]>> ExportReportTableExcelAsync(
+        long stationId,
+        StationReportTableQuery query,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Xuất Excel lịch sử sự kiện.</summary>
+    Task<Result<byte[]>> ExportEventHistoryExcelAsync(
+        long stationId,
+        StationEventHistoryQuery query,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Xuất Excel alarm đang mở.</summary>
+    Task<Result<byte[]>> ExportActiveAlarmsExcelAsync(
+        long stationId,
+        ActiveAlarmQuery query,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Báo cáo nhiệt độ bơm (history_30s) — phân trang trong ngày.</summary>
     Task<Result<PaginationResult<PumpTemperatureReportRowDto>>> GetPumpTemperatureReportAsync(
         long stationId,
@@ -124,6 +154,12 @@ public interface IScadaUserQueryService
 
     /// <summary>Tạo user SCADA (admin) — không phát JWT.</summary>
     Task<Result<ScadaUserDto>> CreateAsync(CreateScadaUserRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Cập nhật hồ sơ SCADA user (không đổi password).</summary>
+    Task<Result<ScadaUserDto>> UpdateAsync(long id, UpdateScadaUserRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Deactivate user (<c>IsActive = false</c>) — giữ lịch sử audit.</summary>
+    Task<Result> DeactivateAsync(long id, CancellationToken cancellationToken = default);
 }
 
 public interface IAppSettingQueryService
@@ -138,5 +174,15 @@ public interface IAppSettingQueryService
     /// <summary>Cập nhật idle timeout phiên — upsert app_settings.</summary>
     Task<Result<SessionPolicyDto>> UpdateSessionPolicyAsync(
         UpdateSessionPolicyRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Cập nhật AppSetting theo key — chỉ allowlisted editable keys.</summary>
+    Task<Result<AppSettingDto>> UpdateByKeyAsync(
+        string settingKey,
+        UpdateAppSettingRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Catalog định nghĩa key/source/editable (không lộ secrets).</summary>
+    Task<Result<IReadOnlyList<AppSettingCatalogItemDto>>> GetCatalogAsync(
         CancellationToken cancellationToken = default);
 }

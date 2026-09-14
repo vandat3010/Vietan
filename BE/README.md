@@ -799,7 +799,8 @@ Vì Application chỉ phụ thuộc interface do chính nó khai báo, mọi h�
 | GET | `/api/v1/event-logs` | Event hệ thống |
 | GET | `/api/v1/user-activity-logs` | Activity user SCADA |
 
-> **Dev:** JWT đang tạm tắt (`TAM-TAT-LOGIN` trong `Program.cs` / Controllers).
+> **Dev/Prod:** JWT authentication **đang bật**. Gọi API SCADA cần Bearer token.
+> (Ghi chú cũ `TAM-TAT-LOGIN` đã lỗi thời — không còn áp dụng.)
 > Search chuỗi đó để bật lại auth.
 
 ## 17. Nguyên tắc đã được áp dụng sẵn

@@ -4,9 +4,9 @@ Tài liệu mô tả toàn bộ endpoint, interface, implementation và các tr�
 
 > **API Design chi tiết Stations + Báo cáo:** xem [`API_Design_Stations_Reports.md`](./API_Design_Stations_Reports.md).
 
-> **Auth hiện đang tắt** (`TAM-TAT-LOGIN`): JWT / `[Authorize]` bị comment trong `Program.cs` và hầu hết controller. Bật lại bằng cách bỏ comment các dòng đánh dấu `TAM-TAT-LOGIN`.
+> **Auth đang BẬT:** JWT + `[Authorize]` trên SCADA/IAM controllers. Gọi API cần Bearer token (trừ login/register/refresh/forgot-password).
 
-Response API mặc định bọc trong `ApiResponse<T>` (trừ export Excel và `/health`).
+Response API mặc định bọc trong `ApiResponse<T>` (trừ export Excel file stream và `/health`).
 
 Query danh sách kế thừa `PaginationRequest` luôn có thêm:
 
@@ -76,64 +76,49 @@ Query danh sách kế thừa `PaginationRequest` luôn có thêm:
 
 | Method | Đường dẫn | Mô tả |
 |--------|-----------|-------|
-| GET | `/api/v1/audit-logs` | Nhật ký audit (chỉ đọc) |
+| GET | `/api/v1/audit-logs` | Nhật ký IAM audit (Admin) |
+| POST | `/api/v1/audit-logs` | Client UX event (authenticated) — **từ chối** event backend-owned (Login/Export/…) |
+| GET | `/api/v1/system-audit-logs` | System audit SCADA (Admin) |
 | GET | `/api/v1/Reports/users/summary` | Tổng hợp số user (Dapper) |
 | GET | `/api/v1/Reports/users/top-active?top=10` | Top user hoạt động |
 | GET | `/health` | Health check (PostgreSQL) |
 
 ---
 
-## 1.5 SCADA Metadata — schema `scada` (chỉ GET)
+## 1.5 SCADA Metadata — schema `scada` / `app` (GET + một số mutation Admin)
 
-| Method | Đường dẫn | Mô tả |
-|--------|-----------|-------|
-| GET | `/api/v1/stations` | Danh sách trạm (lọc `isActive`, `keyword`) |
-| GET | `/api/v1/stations/{id}` | Chi tiết trạm |
-| GET | `/api/v1/stations/{stationId}/electrical` | Thông số điện theo `stationId` (optional `deviceId`, `deviceType`) |
-| GET | `/api/v1/stations/{stationId}/schematic` | Sơ đồ nguyên lý: MCCB I/V, thẻ bơm, status (không gồm electrical) |
-| GET | `/api/v1/stations/{stationId}/device-cards` | Thiết bị theo trạm: join `station→plc→device→tag→history_1s` theo Id |
-| GET | `/api/v1/stations/{stationId}/device-monitor` | Màn Devices: field UI card bơm (không dump plc/tag) |
-| GET | `/api/v1/stations/{stationId}/reports/devices` | Dropdown báo cáo: chỉ `{ id, name }` (`0`=Mức nước) |
-| GET | `/api/v1/stations/{stationId}/reports/water-levels` | Báo cáo mức nước (`history_30s`), phân trang trong ngày |
-| GET | `/api/v1/stations/{stationId}/reports/pump-temperatures` | Báo cáo nhiệt độ bơm (`history_30s`), phân trang trong ngày |
-| GET | `/api/v1/plcs` | Danh sách PLC (`stationId`, `isEnable`) |
-| GET | `/api/v1/plcs/{id}` | Chi tiết PLC |
-| GET | `/api/v1/devices` | Danh sách thiết bị (`plcId`, `deviceType`) |
-| GET | `/api/v1/devices/{id}` | Chi tiết thiết bị |
-| GET | `/api/v1/tags` | Danh sách tag (`plcId`, `deviceId`, `enableRealtime`…) |
-| GET | `/api/v1/tags/{id}` | Chi tiết tag |
-| GET | `/api/v1/history-profiles` | Tất cả profile ghi lịch sử |
-| GET | `/api/v1/history-profiles/{id}` | Chi tiết profile |
-| GET | `/api/v1/tag-history-configs` | Cấu hình tag ↔ profile |
-| GET | `/api/v1/tag-history-configs/{id}` | Chi tiết cấu hình |
-| GET | `/api/v1/communication-configs` | Cấu hình giao thức (S7, Modbus…) |
-| GET | `/api/v1/communication-configs/{id}` | Chi tiết |
-| GET | `/api/v1/mqtt-configs` | Cấu hình MQTT (**không trả password**) |
-| GET | `/api/v1/mqtt-configs/{id}` | Chi tiết |
-| GET | `/api/v1/scada-users` | User vận hành SCADA (**không trả passwordHash**) |
-| GET | `/api/v1/scada-users/{id}` | Chi tiết |
-| GET | `/api/v1/app-settings` | Tất cả setting ứng dụng |
-| GET | `/api/v1/app-settings/{id}` | Theo Id |
-| GET | `/api/v1/app-settings/by-key/{settingKey}` | Theo khóa |
+| Method | Đường dẫn | Auth | Mô tả |
+|--------|-----------|------|-------|
+| GET/PUT | `/api/v1/scada-users` … | Admin | CRUD user SCADA (DELETE = soft deactivate) |
+| GET/PUT | `/api/v1/session-policy` | Auth / Admin PUT | Idle timeout |
+| GET/PUT | `/api/v1/app-settings` … | Admin | Read + PUT by-key (allowlist) + catalog |
+| GET/PUT | `/api/v1/stations` … | Auth / Admin PUT | Metadata + reports/events/alarms/export |
+| GET/POST/PATCH/DELETE | `/api/v1/map-layers` | Auth / Admin mutate | KMZ/KML layers |
+| GET/POST/PUT/DELETE | `/api/v1/licenses` | Admin | License CRUD + concurrent status |
 
----
+## 1.6 History / Timescale — schema `history` (GET + alarm commands)
 
-## 1.6 History / Timescale — schema `history` (chỉ GET)
+| Method | Đường dẫn | Auth | Mô tả |
+|--------|-----------|------|-------|
+| GET | `/api/v1/alarm-histories` / `active` | Auth | Lịch sử / alarm đang mở |
+| POST | `/api/v1/alarm-histories/{id}/acknowledge` | Operator,Admin | Ack (`IsAcknowledged`) |
+| POST | `/api/v1/alarm-histories/{id}/clear` | Operator,Admin | Clear (`EndTime`) — không xóa row |
+| GET | `/api/v1/event-logs` | Auth | Event log |
+| GET | `/api/v1/user-activity-logs` | Auth | User activity |
 
-> **NHỚ:** `history_1s` volume lớn → **Dapper + Stored Procedure**, không EF.  
-> Chi tiết: [`API_Design_Stations_Reports.md`](./API_Design_Stations_Reports.md) §0.
+### Stations & metadata (chi tiết)
 
-| Method | Đường dẫn | Mô tả |
-|--------|-----------|-------|
-| GET | `/api/v1/history/1s` | Mẫu 1 giây — **bắt buộc** `from` + `to` |
-| GET | `/api/v1/history/1m` | Mẫu 1 phút — bắt buộc khoảng thời gian |
-| GET | `/api/v1/history/30m` | Mẫu 30 phút — bắt buộc khoảng thời gian |
-| GET | `/api/v1/alarm-histories` | Lịch sử alarm |
-| GET | `/api/v1/alarm-histories/{id}` | Chi tiết alarm |
-| GET | `/api/v1/event-logs` | Nhật ký sự kiện hệ thống |
-| GET | `/api/v1/event-logs/{id}` | Chi tiết |
-| GET | `/api/v1/user-activity-logs` | Nhật ký thao tác user SCADA |
-| GET | `/api/v1/user-activity-logs/{id}` | Chi tiết |
+| Method | Đường dẫn | Auth | Mô tả |
+|--------|-----------|------|-------|
+| GET | `/api/v1/stations` | Auth | Danh sách (có `latitude`/`longitude` cho dashboard map) |
+| PUT | `/api/v1/stations/{id}` | Admin | Cập nhật metadata |
+| GET | `/api/v1/stations/{id}/alarms/active` | Auth | Alarm mở theo trạm |
+| GET | `.../reports/table/export`, `.../events/history/export` | Operator,Admin | Excel server-side |
+| GET | `/api/v1/plcs`, `/devices`, `/tags` | Auth | Metadata đọc |
+| GET | `/api/v1/history-profiles`, `/tag-history-configs`, `/mqtt-configs`, `/communication-configs` | Admin | Cấu hình |
+| GET | `/api/v1/history/1s|1m|30m` | Auth | Mẫu lịch sử — bắt buộc `from`/`to` |
+
+> **Team:** chưa có BE entity — FE đang mock. **IAlarmService (Industrial Guid):** vẫn stub; ack/clear thật dùng `alarm_history` (long id).
 
 ---
 
@@ -511,7 +496,9 @@ Controller
 # 6. Lưu ý quan trọng
 
 1. **Hai hệ user:** `app.Users` (IAM / JWT) ≠ `scada.users` (`ScadaUser` vận hành SCADA).
-2. **SCADA API hiện chỉ GET** — chưa có POST/PUT/DELETE metadata.
+2. **SCADA API** — GET vận hành + mutation Admin (users/stations/session/app-settings/map/licenses) + alarm ack/clear Operator.
+3. **Team** — chưa có BE; FE mock.
+4. **Industrial `IAlarmService` (Guid)** — stub; production ack/clear = `HistoryQueryService` + `alarm_history`.
 3. **History bắt buộc `from` + `to`** — tránh quét cả hypertable.
 4. Có **hai** bộ DTO Industrial (Guid, tương lai) khác bộ History/SCADA đang dùng API (`long`).
 5. Connection Development: xem `appsettings.Development.json` (`postgres` / `123456` / DB `postgres`).

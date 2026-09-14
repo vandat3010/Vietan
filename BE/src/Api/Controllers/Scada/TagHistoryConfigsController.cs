@@ -3,14 +3,16 @@ using Backend.Application.Interfaces.Services.Scada;
 using Backend.Shared.Constants;
 using Backend.Shared.Pagination;
 using Backend.Shared.Responses;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Backend.Api.Controllers.Scada;
 
-/// <summary>API cấu hình tag ↔ history profile (scada.tag_history_config).</summary>
+/// <summary>API cấu hình tag ↔ history profile — Admin only.</summary>
 [ApiController]
 [Route("api/v1/tag-history-configs")]
 [Produces("application/json")]
+[Authorize(Roles = ScadaRoles.AdminOnly)]
 public class TagHistoryConfigsController(ITagHistoryConfigQueryService configs) : ControllerBase
 {
     /// <summary>

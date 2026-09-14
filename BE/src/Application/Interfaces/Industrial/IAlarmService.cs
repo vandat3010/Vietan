@@ -5,11 +5,10 @@ using Backend.Shared.Results;
 namespace Backend.Application.Interfaces.Industrial;
 
 /// <summary>
-/// Forward-looking contract for the alarm subsystem: no implementation is
-/// registered yet, so resolving this from DI will fail until one is added. The
-/// eventual implementation belongs in <c>src\Infrastructure\Industrial\</c>; the
-/// contract lives here so alarm endpoints and notification workers can be built
-/// against the acknowledge/clear lifecycle before that work starts.
+/// Legacy Industrial Guid contract — <b>not registered in DI</b>.
+/// Production acknowledge/clear uses <c>IAlarmHistoryQueryService</c>
+/// against Timescale <c>alarm_history</c> (long id):
+/// <c>POST /api/v1/alarm-histories/{id}/acknowledge|clear</c>.
 /// </summary>
 public interface IAlarmService
 {
